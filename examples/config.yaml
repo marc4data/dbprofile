@@ -1,0 +1,49 @@
+# dbprofile — NYC Taxi on BigQuery (default development config)
+# Credentials are loaded from environment variables — never hardcode them here.
+# Copy .env.example to .env and fill in values before running.
+
+connection:
+  dialect: bigquery
+  project: "${BQ_PROJECT}"
+  credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS}"
+
+scope:
+  project: bigquery-public-data
+  dataset: new_york_taxi_trips
+  tables:
+    - tlc_yellow_trips_2022
+    - tlc_green_trips_2022
+  exclude_tables: []
+  column_overrides:
+    tlc_yellow_trips_2022:
+      include:
+        - vendor_id
+        - pickup_datetime
+        - dropoff_datetime
+        - passenger_count
+        - trip_distance
+        - rate_code
+        - store_and_fwd_flag
+        - payment_type
+        - fare_amount
+        - extra
+        - mta_tax
+        - tip_amount
+        - tolls_amount
+        - total_amount
+
+checks:
+  enabled: [all]
+  disabled: []
+  sample_rate: 0.02          # 2% sample — ~6M rows from 2022 table
+
+report:
+  output: ./reports/nyc_taxi_profile.html
+  include: [tables, charts]
+  thresholds:
+    null_pct_warn: 5
+    null_pct_critical: 20
+    duplicate_pct_warn: 0.001
+    duplicate_pct_critical: 0.01
+    outlier_pct_warn: 1
+    outlier_pct_critical: 5

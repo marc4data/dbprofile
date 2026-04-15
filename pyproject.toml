@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dbprofile"
+version = "0.1.0"
+description = "Automated SQL database profiling with navigable HTML reports"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "sqlalchemy-bigquery>=1.9",
+    "google-cloud-bigquery>=3.0",
+    "google-auth>=2.0",
+    "pandas>=2.0",
+    "jinja2>=3.0",
+    "pyyaml>=6.0",
+    "click>=8.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+    "pyarrow>=14.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+    "duckdb>=0.9",
+]
+snowflake = [
+    "snowflake-connector-python>=3.0",
+    "cryptography>=41.0",
+]
+
+[project.scripts]
+dbprofile = "dbprofile.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

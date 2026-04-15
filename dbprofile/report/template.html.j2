@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dbprofile — {{ project }}.{{ dataset }}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  /* ── Reset & base ─────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         font-size: 14px; color: #1a1a2e; background: #f8f9fb; display: flex;
+         min-height: 100vh; }
+
+  /* ── Sidebar ──────────────────────────────────── */
+  #sidebar {
+    width: 240px; min-width: 240px; background: #1a1a2e; color: #cdd6f4;
+    position: fixed; top: 0; left: 0; bottom: 0; overflow-y: auto;
+    display: flex; flex-direction: column; z-index: 100;
+  }
+  #sidebar .brand {
+    padding: 18px 16px 14px; font-size: 16px; font-weight: 700;
+    color: #89dceb; border-bottom: 1px solid #2a2a4a; letter-spacing: 0.5px;
+  }
+  #sidebar .brand small { display: block; font-size: 11px; font-weight: 400;
+    color: #6c7086; margin-top: 2px; }
+  #sidebar nav { flex: 1; padding: 10px 0; }
+  .nav-table { padding: 6px 12px; }
+  .nav-table a {
+    display: block; color: #cdd6f4; text-decoration: none; font-weight: 600;
+    font-size: 12px; padding: 4px 4px; border-radius: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nav-table a:hover { background: #2a2a4a; color: #89dceb; }
+  .nav-check { padding: 1px 12px 1px 22px; }
+  .nav-check a {
+    display: block; color: #6c7086; text-decoration: none; font-size: 11px;
+    padding: 2px 4px; border-radius: 3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .nav-check a:hover { color: #cdd6f4; background: #2a2a4a; }
+  .nav-sev { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 4px; vertical-align: middle; }
+  .nav-sev.critical { background: #f38ba8; }
+  .nav-sev.warn { background: #f9e2af; }
+  .nav-sev.ok { background: #a6e3a1; }
+  .nav-sev.info { background: #89dceb; }
+
+  /* ── Main content ─────────────────────────────── */
+  #main { margin-left: 240px; flex: 1; min-width: 0; }
+
+  /* ── Sticky header ────────────────────────────── */
+  #topbar {
+    position: sticky; top: 0; z-index: 90; background: #fff;
+    border-bottom: 2px solid #e0e4ef; padding: 10px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  #topbar h1 { font-size: 15px; font-weight: 700; color: #1a1a2e; flex: 1; }
+  #topbar .run-meta { font-size: 11px; color: #6c7086; white-space: nowrap; }
+  #btn-issues-only {
+    padding: 5px 14px; background: #1a1a2e; color: #fff; border: none;
+    border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: background 0.15s;
+  }
+  #btn-issues-only:hover { background: #f38ba8; }
+  #btn-issues-only.active { background: #f38ba8; }
+
+  /* ── Summary cards ────────────────────────────── */
+  #summary { padding: 24px 24px 0; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+  .card {
+    background: #fff; border-radius: 8px; padding: 16px 20px;
+    border: 1px solid #e0e4ef; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .card .label { font-size: 11px; font-weight: 600; color: #6c7086;
+    text-transform: uppercase; letter-spacing: 0.5px; }
+  .card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+  .card.critical .value { color: #d20f39; }
+  .card.warn .value { color: #df8e1d; }
+  .card.ok .value { color: #40a02b; }
+  .card.neutral .value { color: #1a1a2e; }
+
+  /* ── Issues table ─────────────────────────────── */
+  .section { padding: 20px 24px; }
+  .section-title {
+    font-size: 16px; font-weight: 700; color: #1a1a2e;
+    margin-bottom: 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #e0e4ef;
+  }
+  table.data-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+    background: #fff; border-radius: 8px; overflow: hidden;
+    border: 1px solid #e0e4ef;
+  }
+  table.data-table thead th {
+    background: #f0f2f8; text-align: left; padding: 8px 12px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; color: #4c5166; border-bottom: 1px solid #e0e4ef;
+  }
+  table.data-table tbody td { padding: 7px 12px; border-bottom: 1px solid #f0f2f8; }
+  table.data-table tbody tr:hover { background: #f8f9fb; }
+  table.data-table tbody tr:last-child td { border-bottom: none; }
+  table.data-table tbody tr[data-anchor] { cursor: pointer; }
+
+  /* ── Severity badges ──────────────────────────── */
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .badge.critical { background: #fce8ec; color: #d20f39; }
+  .badge.warn     { background: #fef3cd; color: #b45309; }
+  .badge.ok       { background: #e8f8e8; color: #40a02b; }
+  .badge.info     { background: #e0f4f8; color: #0077a8; }
+
+  /* ── Table sections ───────────────────────────── */
+  .table-section {
+    margin: 0 24px 28px; background: #fff; border-radius: 10px;
+    border: 1px solid #e0e4ef; overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  }
+  .table-header {
+    background: #1a1a2e; color: #cdd6f4; padding: 12px 18px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .table-header h2 { font-size: 14px; font-weight: 700; color: #89dceb; flex: 1; }
+  .table-header .table-sev-pills { display: flex; gap: 8px; font-size: 12px; }
+  .pill { padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 11px; }
+  .pill.critical { background: #f38ba8; color: #1a1a2e; }
+  .pill.warn     { background: #f9e2af; color: #1a1a2e; }
+  .pill.ok       { background: #a6e3a1; color: #1a1a2e; }
+
+  /* ── Heatmap scorecard ────────────────────────── */
+  .scorecard-wrap { overflow-x: auto; padding: 14px 18px; border-bottom: 1px solid #e0e4ef; }
+  .scorecard-title { font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: #6c7086; margin-bottom: 8px; }
+  table.heatmap { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+  table.heatmap th { padding: 3px 8px; color: #6c7086; font-weight: 600;
+    font-size: 10px; text-transform: uppercase; }
+  table.heatmap td.col-name { padding: 3px 10px 3px 0; color: #4c5166; font-weight: 500; }
+  table.heatmap td.cell {
+    width: 28px; height: 22px; text-align: center;
+    border-radius: 3px; margin: 1px;
+  }
+  .cell.critical { background: #f38ba8; }
+  .cell.warn     { background: #f9e2af; }
+  .cell.ok       { background: #a6e3a1; }
+  .cell.info     { background: #89dceb; }
+  .cell.na       { background: #e0e4ef; }
+
+  /* ── Check sub-sections ───────────────────────── */
+  .check-section { border-bottom: 1px solid #f0f2f8; }
+  .check-section:last-child { border-bottom: none; }
+  .check-header {
+    padding: 10px 18px; display: flex; align-items: center; gap: 10px;
+    cursor: pointer; user-select: none;
+  }
+  .check-header:hover { background: #f8f9fb; }
+  .check-name { font-size: 13px; font-weight: 600; color: #1a1a2e; flex: 1; }
+  .check-body { padding: 4px 18px 16px; display: none; }
+  .check-body.open { display: block; }
+  .check-toggle { color: #6c7086; font-size: 12px; transition: transform 0.15s; }
+  .check-toggle.open { transform: rotate(90deg); }
+
+  /* ── Stat cards (inline) ──────────────────────── */
+  .stat-cards { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat-card {
+    background: #f8f9fb; border: 1px solid #e0e4ef; border-radius: 6px;
+    padding: 8px 14px; min-width: 120px;
+  }
+  .stat-card .s-label { font-size: 10px; color: #6c7086; font-weight: 600;
+    text-transform: uppercase; }
+  .stat-card .s-value { font-size: 18px; font-weight: 700; color: #1a1a2e; margin-top: 2px; }
+
+  /* ── Chart containers ─────────────────────────── */
+  .chart-wrap { max-width: 680px; margin: 12px 0; position: relative; height: 220px; }
+
+  /* ── Issues-only mode ─────────────────────────── */
+  body.issues-only .check-section.all-ok { display: none; }
+  body.issues-only .table-section.all-ok { display: none; }
+
+  /* ── Scrollbar ────────────────────────────────── */
+  #sidebar::-webkit-scrollbar { width: 4px; }
+  #sidebar::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════ SIDEBAR -->
+<aside id="sidebar">
+  <div class="brand">
+    dbprofile
+    <small>{{ project }}{% if dataset %}.{{ dataset }}{% endif %}</small>
+  </div>
+  <nav>
+    <div class="nav-table"><a href="#summary">&#9654; Executive Summary</a></div>
+    {% for table in tables %}
+    <div class="nav-table">
+      <a href="#table-{{ table }}">{{ table }}</a>
+    </div>
+    {% set td = tables_data[table] %}
+    {% for check_name, check_results in td.checks.items() %}
+    {% set worst = namespace(sev='ok') %}
+    {% for r in check_results %}
+      {% if r.severity == 'critical' %}{% set worst.sev = 'critical' %}
+      {% elif r.severity == 'warn' and worst.sev != 'critical' %}{% set worst.sev = 'warn' %}
+      {% endif %}
+    {% endfor %}
+    <div class="nav-check">
+      <a href="#{{ table }}-{{ check_name }}">
+        <span class="nav-sev {{ worst.sev }}"></span>{{ check_name | replace('_', ' ') }}
+      </a>
+    </div>
+    {% endfor %}
+    {% endfor %}
+  </nav>
+</aside>
+
+<!-- ═══════════════════════════════════════════════════════════ TOPBAR -->
+<div id="main">
+<div id="topbar">
+  <h1>dbprofile report</h1>
+  <span class="run-meta">{{ run_at }} &nbsp;|&nbsp; {{ sample_rate_pct }} sample</span>
+  <button id="btn-issues-only" onclick="toggleIssuesOnly(this)">Issues only</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ SUMMARY -->
+<div id="summary" class="section">
+  <div class="section-title">Executive Summary</div>
+  <div class="cards">
+    <div class="card neutral">
+      <div class="label">Tables profiled</div>
+      <div class="value">{{ total_tables }}</div>
+    </div>
+    <div class="card neutral">
+      <div class="label">Columns profiled</div>
+      <div class="value">{{ total_columns }}</div>
+    </div>
+    <div class="card {% if critical_count > 0 %}critical{% else %}ok{% endif %}">
+      <div class="label">Critical issues</div>
+      <div class="value">{{ critical_count }}</div>
+    </div>
+    <div class="card {% if warn_count > 0 %}warn{% else %}ok{% endif %}">
+      <div class="label">Warnings</div>
+      <div class="value">{{ warn_count }}</div>
+    </div>
+  </div>
+
+  {% if issues %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Table</th><th>Check</th><th>Column</th>
+        <th>Severity</th><th>Metric</th><th>Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for issue in issues %}
+      <tr data-anchor="#{{ issue.anchor }}" onclick="jumpTo('{{ issue.anchor }}')">
+        <td>{{ issue.table }}</td>
+        <td>{{ issue.check | replace('_', ' ') }}</td>
+        <td>{{ issue.column }}</td>
+        <td><span class="badge {{ issue.severity }}">{{ issue.severity }}</span></td>
+        <td>{{ issue.metric }}</td>
+        <td>{{ issue.value }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#40a02b;font-weight:600;padding:12px 0;">&#10003; No warnings or critical issues found.</p>
+  {% endif %}
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ PER-TABLE -->
+{% for table in tables %}
+{% set td = tables_data[table] %}
+{% set sc = td.severity_counts %}
+{% set table_has_issues = sc.critical > 0 or sc.warn > 0 %}
+
+<div id="table-{{ table }}"
+     class="table-section {% if not table_has_issues %}all-ok{% endif %}">
+
+  <!-- Table header bar -->
+  <div class="table-header">
+    <h2>{{ table }}</h2>
+    <div class="table-sev-pills">
+      {% if sc.critical > 0 %}
+        <span class="pill critical">{{ sc.critical }} critical</span>
+      {% endif %}
+      {% if sc.warn > 0 %}
+        <span class="pill warn">{{ sc.warn }} warn</span>
+      {% endif %}
+      {% if sc.critical == 0 and sc.warn == 0 %}
+        <span class="pill ok">all clear</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Heatmap scorecard -->
+  {% if td.scorecard %}
+  <div class="scorecard-wrap">
+    <div class="scorecard-title">Column &times; Check heatmap</div>
+    <table class="heatmap">
+      <thead>
+        <tr>
+          <th>Column</th>
+          {% for cn in all_check_names %}
+          <th title="{{ cn }}">{{ cn | replace('_', ' ') | truncate(10, true, '') }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in td.scorecard %}
+        <tr>
+          <td class="col-name">{{ row.column }}</td>
+          {% for cn in all_check_names %}
+          <td class="cell {{ row[cn] | default('na') }}"
+              title="{{ cn }}: {{ row[cn] | default('n/a') }}"></td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- Per-check sections -->
+  {% for check_name, check_results in td.checks.items() %}
+  {% set worst_sev = namespace(v='ok') %}
+  {% for r in check_results %}
+    {% if r.severity == 'critical' %}{% set worst_sev.v = 'critical' %}
+    {% elif r.severity == 'warn' and worst_sev.v != 'critical' %}{% set worst_sev.v = 'warn' %}
+    {% endif %}
+  {% endfor %}
+
+  <div id="{{ table }}-{{ check_name }}"
+       class="check-section {% if worst_sev.v == 'ok' or worst_sev.v == 'info' %}all-ok{% endif %}">
+    <div class="check-header" onclick="toggleCheck(this)">
+      <span class="badge {{ worst_sev.v }}">{{ worst_sev.v }}</span>
+      <span class="check-name">{{ check_name | replace('_', ' ') | title }}</span>
+      <span class="check-toggle">&#9654;</span>
+    </div>
+    <div class="check-body">
+
+      {% if check_name == 'schema_audit' %}
+        {% for r in check_results %}
+        {% if r.detail.columns %}
+        <table class="data-table" style="margin-bottom:12px;">
+          <thead><tr><th>#</th><th>Column</th><th>Type</th><th>Nullable</th></tr></thead>
+          <tbody>
+          {% for col in r.detail.columns %}
+          <tr>
+            <td>{{ col.ordinal_position }}</td>
+            <td>{{ col.name }}</td>
+            <td><code>{{ col.data_type }}</code></td>
+            <td>{{ '✓' if col.is_nullable else '✗' }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% if r.detail.missing_from_contract %}
+        <p style="color:#d20f39;font-weight:600;">
+          Missing from contract: {{ r.detail.missing_from_contract | join(', ') }}
+        </p>
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+
+      {% elif check_name == 'row_count' %}
+        {% for r in check_results %}
+          {% if r.metric == 'row_count' %}
+          <div class="stat-cards">
+            <div class="stat-card">
+              <div class="s-label">Row count</div>
+              <div class="s-value">{{ "{:,}".format(r.value | int) }}</div>
+            </div>
+          </div>
+          {% elif r.metric == 'daily_distribution' and r.detail.series %}
+            <p style="font-size:12px;color:#6c7086;margin-bottom:8px;">
+              Date column: <strong>{{ r.detail.date_column }}</strong>
+              &nbsp;|&nbsp; {{ r.detail.gap_days | length }} gap day(s)
+              {% if r.detail.skew_days %}&nbsp;|&nbsp; <span style="color:#d20f39">{{ r.detail.skew_days | length }} skew day(s)</span>{% endif %}
+            </p>
+            {% if include_charts %}
+            <div class="chart-wrap">
+              <canvas id="chart-{{ table }}-rowcount-{{ loop.index }}"></canvas>
+            </div>
+            <script>
+            (function(){
+              var series = {{ r.detail.series | tojson }};
+              var labels = series.map(function(s){ return s.date; });
+              var data   = series.map(function(s){ return s.count; });
+              new Chart(document.getElementById('chart-{{ table }}-rowcount-{{ loop.index }}'), {
+                type: 'line',
+                data: { labels: labels, datasets: [{
+                  label: 'Rows/day', data: data,
+                  borderColor: '#89dceb', backgroundColor: 'rgba(137,220,235,0.15)',
+                  borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.1
+                }]},
+                options: { responsive: true, maintainAspectRatio: false,
+                  plugins: { legend: { display: false } },
+                  scales: { x: { ticks: { maxTicksLimit: 12, font: { size: 10 } } },
+                            y: { ticks: { font: { size: 10 } } } }
+                }
+              });
+            })();
+            </script>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+
+      {% elif check_name == 'null_density' %}
+        {% if include_tables %}
+        <table class="data-table" style="margin-bottom:8px;">
+          <thead><tr><th>Column</th><th>Null %</th><th>Null count</th><th>Sentinel count</th><th>Severity</th></tr></thead>
+          <tbody>
+          {% for r in check_results %}
+          <tr>
+            <td>{{ r.column }}</td>
+            <td>{{ r.value }}%</td>
+            <td>{{ "{:,}".format(r.detail.null_count | default(0) | int) }}</td>
+            <td>{{ "{:,}".format(r.detail.sentinel_count | default(0) | int) }}</td>
+            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+      {% elif check_name == 'uniqueness' %}
+        {% if include_tables %}
+        <table class="data-table" style="margin-bottom:8px;">
+          <thead><tr><th>Column</th><th>Distinct %</th><th>Duplicate %</th><th>Severity</th></tr></thead>
+          <tbody>
+          {% for r in check_results if r.column %}
+          <tr>
+            <td>{{ r.column }}</td>
+            <td>{{ r.detail.distinct_pct | default('—') }}%</td>
+            <td>{{ r.value }}%</td>
+            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+      {% elif check_name == 'numeric_distribution' %}
+        {% for r in check_results %}
+        <p style="font-weight:600;margin:10px 0 4px;">{{ r.column }}
+          <span class="badge {{ r.severity }}" style="margin-left:8px;">{{ r.severity }}</span>
+        </p>
+        <div class="stat-cards">
+          {% for key in ['min','p25','p50','p75','p95','p99','max'] %}
+          {% if key in r.detail %}
+          <div class="stat-card">
+            <div class="s-label">{{ key }}</div>
+            <div class="s-value" style="font-size:14px;">{{ r.detail[key] }}</div>
+          </div>
+          {% endif %}
+          {% endfor %}
+          <div class="stat-card">
+            <div class="s-label">Outlier %</div>
+            <div class="s-value" style="font-size:14px;color:{% if r.severity=='critical' %}#d20f39{% elif r.severity=='warn' %}#b45309{% else %}#40a02b{% endif %};">
+              {{ r.value }}%
+            </div>
+          </div>
+        </div>
+        {% if include_charts and r.detail.get('p25') is not none %}
+        <div class="chart-wrap" style="height:140px;">
+          <canvas id="chart-{{ table }}-num-{{ r.column | replace(' ','_') }}"></canvas>
+        </div>
+        <script>
+        (function(){
+          var labels = ['min','p25','p50','p75','p95','p99','max'];
+          var vals   = [
+            {{ r.detail.get('min', 0) }},
+            {{ r.detail.get('p25', 0) }},
+            {{ r.detail.get('p50', 0) }},
+            {{ r.detail.get('p75', 0) }},
+            {{ r.detail.get('p95', 0) }},
+            {{ r.detail.get('p99', 0) }},
+            {{ r.detail.get('max', 0) }}
+          ];
+          new Chart(document.getElementById('chart-{{ table }}-num-{{ r.column | replace(" ","_") }}'), {
+            type: 'bar',
+            data: { labels: labels, datasets: [{
+              label: '{{ r.column }}',
+              data: vals,
+              backgroundColor: 'rgba(137,220,235,0.7)',
+              borderColor: '#89dceb', borderWidth: 1
+            }]},
+            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } }
+            }
+          });
+        })();
+        </script>
+        {% endif %}
+        {% endfor %}
+
+      {% elif check_name == 'frequency_distribution' %}
+        {% for r in check_results if not r.detail.get('skipped') %}
+        {% if r.detail.series %}
+        <p style="font-weight:600;margin:10px 0 4px;">
+          {{ r.column }}
+          <span class="badge {{ r.severity }}" style="margin-left:8px;">{{ r.severity }}</span>
+          <span style="color:#6c7086;font-size:11px;margin-left:8px;">
+            {{ r.detail.distinct_count }} distinct values
+          </span>
+        </p>
+        {% if include_charts %}
+        <div class="chart-wrap" style="height:{{ [r.detail.series|length * 20 + 40, 260]|min }}px;">
+          <canvas id="chart-{{ table }}-freq-{{ r.column | replace(' ','_') }}"></canvas>
+        </div>
+        <script>
+        (function(){
+          var series = {{ r.detail.series | tojson }};
+          var labels = series.map(function(s){ return String(s.value).substring(0,30); });
+          var data   = series.map(function(s){ return s.pct; });
+          new Chart(document.getElementById('chart-{{ table }}-freq-{{ r.column | replace(" ","_") }}'), {
+            type: 'bar',
+            data: { labels: labels, datasets: [{
+              label: '% of rows', data: data,
+              backgroundColor: 'rgba(166,227,161,0.75)',
+              borderColor: '#a6e3a1', borderWidth: 1
+            }]},
+            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { x: { title: { display: true, text: '% of rows', font: { size: 10 } },
+                              ticks: { font: { size: 10 } } },
+                        y: { ticks: { font: { size: 10 } } } }
+            }
+          });
+        })();
+        </script>
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+
+      {% elif check_name == 'temporal_consistency' %}
+        {% for r in check_results %}
+        <p style="font-weight:600;margin:10px 0 4px;">
+          {{ r.column }}
+          <span class="badge {{ r.severity }}" style="margin-left:8px;">{{ r.severity }}</span>
+        </p>
+        <div class="stat-cards" style="margin-bottom:8px;">
+          <div class="stat-card"><div class="s-label">From</div>
+            <div class="s-value" style="font-size:13px;">{{ r.detail.min_date }}</div></div>
+          <div class="stat-card"><div class="s-label">To</div>
+            <div class="s-value" style="font-size:13px;">{{ r.detail.max_date }}</div></div>
+          <div class="stat-card"><div class="s-label">Gap days</div>
+            <div class="s-value" style="font-size:18px;color:{% if r.detail.gap_days %}#d20f39{% else %}#40a02b{% endif %};">
+              {{ r.detail.gap_days | length }}</div></div>
+          <div class="stat-card"><div class="s-label">Anomaly days</div>
+            <div class="s-value" style="font-size:18px;color:{% if r.detail.anomaly_days %}#b45309{% else %}#40a02b{% endif %};">
+              {{ r.detail.anomaly_days | length }}</div></div>
+        </div>
+        {% if include_charts and r.detail.series %}
+        <div class="chart-wrap">
+          <canvas id="chart-{{ table }}-temp-{{ r.column | replace(' ','_') }}"></canvas>
+        </div>
+        <script>
+        (function(){
+          var series = {{ r.detail.series | tojson }};
+          var labels = series.map(function(s){ return s.date; });
+          var data   = series.map(function(s){ return s.count; });
+          new Chart(document.getElementById('chart-{{ table }}-temp-{{ r.column | replace(" ","_") }}'), {
+            type: 'line',
+            data: { labels: labels, datasets: [{
+              label: 'Rows/day', data: data,
+              borderColor: '#cba6f7', backgroundColor: 'rgba(203,166,247,0.12)',
+              borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.2
+            }]},
+            options: { responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: { x: { ticks: { maxTicksLimit: 12, font: { size: 10 } } },
+                        y: { ticks: { font: { size: 10 } } } }
+            }
+          });
+        })();
+        </script>
+        {% endif %}
+        {% endfor %}
+
+      {% elif check_name == 'format_validation' %}
+        {% if include_tables %}
+        <table class="data-table" style="margin-bottom:8px;">
+          <thead><tr><th>Column</th><th>Format</th><th>Violations</th><th>Violation %</th><th>Severity</th></tr></thead>
+          <tbody>
+          {% for r in check_results %}
+          <tr>
+            <td>{{ r.column }}</td>
+            <td>{{ r.detail.format_label | default(r.detail.get('note','enum check') | truncate(30)) }}</td>
+            <td>{{ "{:,}".format(r.detail.violations | default(r.value) | int) if r.detail.violations is defined else r.value }}</td>
+            <td>{{ r.value }}{% if r.value != 'error' %}%{% endif %}</td>
+            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+      {% else %}
+        <!-- Generic fallback for any check not explicitly templated -->
+        {% if include_tables %}
+        <table class="data-table" style="margin-bottom:8px;">
+          <thead><tr><th>Column</th><th>Metric</th><th>Value</th><th>Severity</th></tr></thead>
+          <tbody>
+          {% for r in check_results %}
+          <tr>
+            <td>{{ r.column | default('—') }}</td>
+            <td>{{ r.metric }}</td>
+            <td>{{ r.value }}</td>
+            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      {% endif %}
+
+    </div><!-- /.check-body -->
+  </div><!-- /.check-section -->
+  {% endfor %}
+</div><!-- /.table-section -->
+{% endfor %}
+
+<!-- spacer -->
+<div style="height:60px;"></div>
+</div><!-- /#main -->
+
+<script>
+function toggleCheck(header) {
+  var body = header.nextElementSibling;
+  var arrow = header.querySelector('.check-toggle');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+function toggleIssuesOnly(btn) {
+  document.body.classList.toggle('issues-only');
+  btn.classList.toggle('active');
+  btn.textContent = btn.classList.contains('active') ? 'Show all' : 'Issues only';
+}
+
+function jumpTo(anchor) {
+  var el = document.getElementById(anchor.replace('#',''));
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Auto-expand the check body if it's collapsed
+  var body = el.querySelector('.check-body');
+  if (body && !body.classList.contains('open')) {
+    var header = el.querySelector('.check-header');
+    if (header) toggleCheck(header);
+  }
+}
+
+// Auto-expand sections with critical issues on load
+document.querySelectorAll('.check-section').forEach(function(section) {
+  var badge = section.querySelector('.check-header .badge');
+  if (badge && (badge.classList.contains('critical') || badge.classList.contains('warn'))) {
+    var body = section.querySelector('.check-body');
+    var arrow = section.querySelector('.check-toggle');
+    if (body) body.classList.add('open');
+    if (arrow) arrow.classList.add('open');
+  }
+});
+</script>
+</body>
+</html>

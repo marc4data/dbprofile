@@ -1,0 +1,32 @@
+# dbprofile — Snowflake config
+# Credentials loaded from environment variables — never hardcode them here.
+# Copy .env.example to .env and add the SNOWFLAKE_* variables.
+
+connection:
+  dialect: snowflake
+  account: "${SNOWFLAKE_ACCOUNT}"
+  user: "${SNOWFLAKE_USER}"
+  private_key_path: "${SNOWFLAKE_PRIVATE_KEY_PATH}"
+  warehouse: "${SNOWFLAKE_WAREHOUSE}"
+  role: "${SNOWFLAKE_ROLE}"
+
+scope:
+  database: Analytics
+  schemas: null                      # null = discover all schemas automatically
+  exclude_tables: []
+
+checks:
+  enabled: [all]
+  disabled: []
+  sample_rate: 0.10                  # 10% sample — adjust based on table sizes
+
+report:
+  output: ./reports/analytics_profile.html
+  include: [tables, charts]
+  thresholds:
+    null_pct_warn: 10
+    null_pct_critical: 50
+    duplicate_pct_warn: 0.001
+    duplicate_pct_critical: 0.01
+    outlier_pct_warn: 1
+    outlier_pct_critical: 5
