@@ -24,6 +24,100 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
+# ── Export-flag resolution ──────────────────────────────────────────────────
+#
+# The three --export-* flags share one mental model:
+#   * 'none'      → skip this output explicitly
+#   * 'auto'      → write to the auto-named path in the resolved out_dir
+#   * <path>      → write to a custom path (overrides auto-naming)
+#   * None        → "no opinion": defaults to 'auto' when --project-dir is set,
+#                   skip when not. This keeps legacy ./reports/ behavior opt-in
+#                   and the new dq_eda/ workflow opt-out.
+
+def _resolve_export_path(
+    flag_value: str | None,
+    project_dir: str | None,
+    stem: str,
+    ext: str,
+    run_at: datetime,
+    out_dir: Path,
+) -> str | None:
+    """Return a concrete output path (or None to skip this export)."""
+    if flag_value == "none":
+        return None
+    if flag_value is None:
+        if not project_dir:
+            return None
+        flag_value = "auto"
+    if flag_value == "auto":
+        return str(out_dir / auto_name(stem, ext, run_at=run_at))
+    return flag_value
+
+
+def _resolve_export_toggle(
+    flag_value: str | None,
+    project_dir: str | None,
+) -> bool:
+    """For boolean exports (notebooks). Returns True iff we should write."""
+    if flag_value == "none":
+        return False
+    if flag_value is None:
+        return bool(project_dir)
+    return True   # 'auto' or any non-'none' value enables it
+
+
+def _write_notebooks_from_results(
+    *,
+    cfg,
+    results: list,
+    out_dir: Path,
+    run_at: datetime,
+) -> None:
+    """Write one notebook per table covered by `results`.
+
+    Reuses the column metadata SchemaAuditCheck stored in result.detail so we
+    don't need a live connector. Tables that lack a schema_audit result are
+    skipped with a one-line warning — that's a misconfiguration (the user
+    disabled the default check) rather than a bug.
+    """
+    from dbprofile.notebook.generator import build_notebook
+    from dbprofile.notebook.helper_copy import copy_helpers
+    from dbprofile.notebook.notebook_writer import write_notebook
+
+    # Helpers are already seeded by the run() command earlier. Calling again
+    # is cheap (silent no-op when state matches) and ensures dq_eda/ is ready
+    # if we ever wire this from elsewhere.
+    copy_helpers(out_dir)
+
+    column_map, schema_map = _columns_from_results(results)
+    target_tables = sorted({r.table for r in results})
+    if not target_tables:
+        return
+
+    connector_type = (cfg.connection.dialect or "duckdb").lower()
+    console.print(f"\n[bold]Building {len(target_tables)} notebook(s)…[/bold]")
+
+    for table in target_tables:
+        cols = column_map.get(table)
+        if not cols:
+            console.print(
+                f"  [yellow]skipped {table}[/yellow] "
+                f"(no schema_audit result — is the check disabled?)"
+            )
+            continue
+        table_results = [r for r in results if r.table == table]
+        nb = build_notebook(
+            table=table,
+            schema_name=schema_map.get(table, "main"),
+            columns=cols,
+            check_results=table_results,
+            config=cfg,
+            connector_type=connector_type,
+        )
+        path, outcome = write_notebook(nb, out_dir, table, run_at=run_at)
+        console.print(f"  [green]{outcome:>30}[/green] → {path.name}")
+
+
 @click.group()
 def main() -> None:
     """dbprofile — automated SQL database profiling."""
@@ -46,9 +140,16 @@ def main() -> None:
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print queries without executing. Shows estimated BQ cost.")
 @click.option("--export-json", default=None,
-              help="Write raw results as JSON. Pass a path or 'auto' for auto-named file.")
+              help="JSON export. With --project-dir: enabled by default; "
+                   "pass 'none' to skip or a path to override. Without "
+                   "--project-dir: pass 'auto' or a path to enable.")
 @click.option("--export-excel", default=None,
-              help="Write a profiling workbook (.xlsx). Pass a path or 'auto' for auto-named file.")
+              help="Excel export. With --project-dir: enabled by default; "
+                   "pass 'none' to skip or a path to override. Without "
+                   "--project-dir: pass 'auto' or a path to enable.")
+@click.option("--export-notebook", default=None,
+              help="Per-table EDA notebook generation. Requires --project-dir. "
+                   "Enabled by default; pass 'none' to skip.")
 @click.option("--verbose", "-v", is_flag=True, default=False,
               help="Enable debug logging.")
 def run(
@@ -60,9 +161,17 @@ def run(
     dry_run: bool,
     export_json: str | None,
     export_excel: str | None,
+    export_notebook: str | None,
     verbose: bool,
 ) -> None:
-    """Profile a database and produce an HTML report."""
+    """Profile a database and produce an HTML report.
+
+    When --project-dir is set, this command also writes the JSON snapshot,
+    Excel workbook, and per-table EDA notebooks by default — pass
+    --export-* none to skip any of them. When --project-dir is omitted,
+    only the HTML report is written unless --export-* is explicitly passed
+    (legacy ./reports/ fallback).
+    """
     _setup_logging(verbose)
 
     # Late imports so startup is fast for --help
@@ -114,16 +223,17 @@ def run(
         else str(out_dir / auto_name(stem, "html", run_at=run_at))
     )
 
-    if export_json is not None:
-        export_json = (
-            str(out_dir / auto_name(stem, "json", run_at=run_at))
-            if export_json == "auto" else export_json
-        )
-    if export_excel is not None:
-        export_excel = (
-            str(out_dir / auto_name(stem, "xlsx", run_at=run_at))
-            if export_excel == "auto" else export_excel
-        )
+    # Resolve export flags into either a concrete path or None (skip).
+    # When --project-dir is set, defaults flip to 'auto' so a single
+    # command writes every artifact. Without --project-dir, only flags
+    # the user explicitly passed take effect (legacy ./reports/ behavior).
+    export_json = _resolve_export_path(
+        export_json, project_dir, stem, "json", run_at, out_dir,
+    )
+    export_excel = _resolve_export_path(
+        export_excel, project_dir, stem, "xlsx", run_at, out_dir,
+    )
+    notebook_enabled = _resolve_export_toggle(export_notebook, project_dir)
 
     # Write HTML report — also returns the template context for other exporters
     out_path, report_context = render_report(results, cfg, html_out, run_at=run_at)
@@ -144,6 +254,13 @@ def run(
         from dbprofile.report.excel_export import write_excel
         xl_path = write_excel(export_excel, report_context)
         console.print(f"[bold green]Excel workbook:[/bold green] {xl_path}")
+
+    # Optional per-table EDA notebook generation. We have everything in memory
+    # already (results + cfg); no need to re-run the profile.
+    if notebook_enabled:
+        _write_notebooks_from_results(
+            cfg=cfg, results=results, out_dir=out_dir, run_at=run_at,
+        )
 
     # BigQuery cost summary
     from dbprofile.connectors.base import BigQueryConnector
