@@ -27,11 +27,14 @@ def dev_duckdb(tmp_path) -> Path:
     import duckdb
     db_path = tmp_path / "test.duckdb"
     conn = duckdb.connect(str(db_path))
+    # fct_orders intentionally has TWO continuous columns (amount, discount)
+    # so the Bivariate section's ≥2-numeric-columns gate fires in the e2e test.
     conn.execute(
         "CREATE TABLE fct_orders AS "
         "SELECT i AS order_id, "
         "       'cat_' || (i % 5) AS category, "
         "       i * 1.25 AS amount, "
+        "       (i * 0.05) AS discount, "
         "       (DATE '2026-01-01' + INTERVAL (i % 60) DAY)::DATE AS order_date "
         "FROM range(1, 201) t(i)"
     )
@@ -119,10 +122,26 @@ def test_notebook_command_produces_valid_ipynb(tmp_path, dev_config):
         assert any("schema(sample_df)" in s for s in code_sources)
         assert any("describe_by_type(sample_df)" in s for s in code_sources)
 
-        # s04 Univariate Analysis (the dev DuckDB tables have continuous
-        # columns, so plot_distribution is guaranteed to appear)
+        # s04 Univariate Analysis (every dev table has at least one
+        # plottable column kind, so the section always appears)
         assert any(s.startswith("## Univariate Analysis") for s in md_sources)
-        assert any("plot_distribution(" in s for s in code_sources)
+
+        # s05 + s06 only fire when the table's columns satisfy the
+        # respective gates. fct_orders has both ≥2 continuous columns
+        # AND a DATE column — exercise both there. dim_customers has
+        # neither, so we don't assert against it.
+        if "fct_orders" in nb_path.name:
+            assert any(s.startswith("## Bivariate Analysis") for s in md_sources)
+            assert any("sns.heatmap" in s for s in code_sources)
+            assert any("plot_scatter(" in s for s in code_sources)
+
+            assert any(s.startswith("## Temporal Analysis") for s in md_sources)
+            assert any("daily_df['day']" in s for s in code_sources)
+
+        # plot_distribution always shows up — fct_orders has 2 continuous
+        # cols, dim_customers has 0 but s04 still emits its header
+        if "fct_orders" in nb_path.name:
+            assert any("plot_distribution(" in s for s in code_sources)
 
     # Helpers were seeded
     for h in ("eda_helpers.py", "eda_profile.py", "eda_helpers_call_templates.py"):
