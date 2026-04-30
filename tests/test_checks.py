@@ -13,10 +13,13 @@ from dbprofile.checks.schema_audit import SchemaAuditCheck
 from dbprofile.checks.temporal_consistency import TemporalConsistencyCheck
 from dbprofile.checks.uniqueness import UniquenessCheck
 from dbprofile.config import (
-    ChecksConfig, CheckThresholds, ConnectionConfig,
-    ProfileConfig, ReportConfig, ScopeConfig,
+    ChecksConfig,
+    CheckThresholds,
+    ConnectionConfig,
+    ProfileConfig,
+    ReportConfig,
+    ScopeConfig,
 )
-
 
 # ── Minimal config for tests ──────────────────────────────────────────────────
 
@@ -53,7 +56,10 @@ def test_schema_audit(connector):
     assert len(results) == 1
     r = results[0]
     assert r.check_name == "schema_audit"
-    assert r.severity == "info"
+    # No all-null columns in the seed table → severity is "ok"
+    # (changed from "info" when severity logic became binary: critical if any
+    # all-null columns, ok otherwise).
+    assert r.severity == "ok"
     assert r.value == len(cols)
     assert "columns" in r.detail
     assert len(r.detail["columns"]) == len(cols)
@@ -106,12 +112,16 @@ def test_uniqueness(connector):
     cols = get_columns(connector, "test_dupes")
     results = UniquenessCheck().run("test_dupes", "main", cols, connector, cfg)
 
-    # id column: only 10 distinct values in 100 rows = 90% duplicates → critical
+    # id column has 10 distinct values in 100 rows → 90% duplicates.
+    # Despite the name, distinct_pct is only 10% so it doesn't qualify as
+    # an identifier (≥95% distinct). High-duplicate non-identifier columns
+    # are classified as "info" — high duplicate_pct on an attribute is
+    # expected, not a problem.
     id_result = next((r for r in results if r.column == "id"), None)
     assert id_result is not None
     assert id_result.metric == "duplicate_pct"
     assert float(id_result.value) > 50.0
-    assert id_result.severity == "critical"
+    assert id_result.severity == "info"
 
     # detail must include distinct_count and top_duplicates
     assert "distinct_count" in id_result.detail

@@ -126,7 +126,8 @@ class DuckDBConnector(BaseConnector):
     dialect = "duckdb"
 
     def __init__(self, conn=None, database_path: str | None = None):
-        """Accept an existing duckdb connection (for tests), a file path, or create an in-memory one."""
+        """Accept an existing duckdb connection (for tests), a file path,
+        or create an in-memory one."""
         import duckdb
 
         if conn is not None:
@@ -181,12 +182,14 @@ class BigQueryConnector(BaseConnector):
 
     def __init__(self, project: str, dataset: str, credentials_path: str | None = None,
                  source_project: str | None = None):
+        from google.auth import default as google_auth_default
         from google.cloud import bigquery
         from google.oauth2 import service_account
-        from google.auth import default as google_auth_default
 
-        self.project = project                              # billing project (your GCP project)
-        self.source_project = source_project or project    # data project (e.g. bigquery-public-data)
+        # billing project (your GCP project)
+        self.project = project
+        # data project (e.g. bigquery-public-data)
+        self.source_project = source_project or project
         self.dataset = dataset
 
         creds_file = credentials_path
@@ -357,8 +360,8 @@ class SnowflakeConnector(BaseConnector):
 
     @staticmethod
     def _load_private_key(path: str, passphrase: str | None) -> bytes:
-        from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives import serialization
 
         with open(path, "rb") as f:
             private_key = serialization.load_pem_private_key(
