@@ -41,8 +41,10 @@ class NullDensityCheck(BaseCheck):
                 for s in _STRING_SENTINELS:
                     sentinel_cases.append(f"SUM(CASE WHEN {col_name} = {s} THEN 1 ELSE 0 END)")
             if self.is_temporal(dt):
+                # Use STRING (supported by BigQuery, Snowflake, DuckDB) rather
+                # than VARCHAR which BigQuery does not accept.
                 sentinel_cases.append(
-                    f"SUM(CASE WHEN CAST({col_name} AS VARCHAR) = {_DATE_SENTINEL} THEN 1 ELSE 0 END)"
+                    f"SUM(CASE WHEN CAST({col_name} AS STRING) = {_DATE_SENTINEL} THEN 1 ELSE 0 END)"
                 )
 
             sentinel_select = (
@@ -79,6 +81,37 @@ class NullDensityCheck(BaseCheck):
                     null_pct, thresholds.null_pct_warn, thresholds.null_pct_critical
                 )
 
+                # For flagged columns, fetch a sample of rows where this column IS NULL
+                null_sample_rows = None
+                if severity in ("critical", "warn") and null_count > 0:
+                    sample_sql = (
+                        f"SELECT * FROM {table_ref} "
+                        f"WHERE {col_name} IS NULL "
+                        f"LIMIT 100"
+                    )
+                    try:
+                        sample_data = connector.execute(sample_sql)
+                        if sample_data:
+                            sample_cols = list(sample_data[0].keys())
+                            null_sample_rows = {
+                                "columns": sample_cols,
+                                "rows": [
+                                    [str(row[c]) if row[c] is not None else None for c in sample_cols]
+                                    for row in sample_data
+                                ],
+                            }
+                    except Exception:
+                        pass  # fail silently — sample rows are supplementary
+
+                detail: dict = {
+                    "total": total,
+                    "null_count": null_count,
+                    "null_pct": round(null_pct, 4),
+                    "sentinel_count": sentinel_count,
+                }
+                if null_sample_rows is not None:
+                    detail["null_sample_rows"] = null_sample_rows
+
                 results.append(
                     CheckResult(
                         table=table,
@@ -88,12 +121,7 @@ class NullDensityCheck(BaseCheck):
                         metric="null_pct",
                         value=round(null_pct, 4),
                         severity=severity,
-                        detail={
-                            "total": total,
-                            "null_count": null_count,
-                            "null_pct": round(null_pct, 4),
-                            "sentinel_count": sentinel_count,
-                        },
+                        detail=detail,
                         sql=sql,
                     )
                 )

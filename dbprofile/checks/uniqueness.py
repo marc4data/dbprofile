@@ -58,6 +58,14 @@ FROM {table_ref} {sample}
                     thresholds.duplicate_pct_critical,
                 )
 
+                # Non-identifier columns (distinct% < 95%) have repeated values by design.
+                # The template already groups these separately and labels them "expected".
+                # Match that logic here: demote warn/critical → info so the heatmap agrees.
+                # Identifier-like columns (distinct% ≥ 95%) still raise true warnings.
+                is_identifier = total > 0 and (distinct_count / total) >= 0.95
+                if not is_identifier and severity in ("warn", "critical"):
+                    severity = "info"
+
                 # Top duplicate values (most repeated)
                 top_sql = f"""
 SELECT {col_name} AS value, COUNT(*) AS n
@@ -93,6 +101,7 @@ LIMIT 20
                             "duplicate_count": duplicate_count,
                             "duplicate_pct": round(duplicate_pct, 4),
                             "top_duplicates": top_dupes,
+                            "is_identifier": is_identifier,
                         },
                         sql=sql,
                     )

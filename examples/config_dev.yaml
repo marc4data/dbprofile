@@ -1,0 +1,30 @@
+# dbprofile — local DuckDB dev config
+# Run seed first:  python scripts/seed_dev.py
+# Then profile:    dbprofile run --config examples/config_dev.yaml
+
+connection:
+  dialect: duckdb
+  database_path: ./inputs/dev.duckdb
+
+scope:
+  schemas:
+    - main
+  tables:
+    - tlc_yellow_trips_2022
+    - tlc_green_trips_2022
+
+checks:
+  enabled: [all]
+  disabled: []
+  sample_rate: 1.0   # small dataset — no sampling needed
+
+report:
+  output: ./reports/dev_profile.html
+  include: [tables, charts]
+  thresholds:
+    null_pct_warn: 5
+    null_pct_critical: 20
+    duplicate_pct_warn: 0.001
+    duplicate_pct_critical: 0.01
+    outlier_pct_warn: 1
+    outlier_pct_critical: 5

@@ -7,6 +7,13 @@ reports/
 results.json
 results.parquet
 
+# Regenerable test data — recreate via scripts/seed_dev.py
+inputs/dev.duckdb
+
+# EDA working notebooks (not part of the tool itself)
+eda_fct_daily_demand.ipynb
+eda_fct_daily_demand_*.html
+
 # Python
 __pycache__/
 *.py[cod]

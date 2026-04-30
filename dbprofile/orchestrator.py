@@ -14,6 +14,7 @@ from dbprofile.checks.frequency_distribution import FrequencyDistributionCheck
 from dbprofile.checks.null_density import NullDensityCheck
 from dbprofile.checks.numeric_distribution import NumericDistributionCheck
 from dbprofile.checks.row_count import RowCountCheck
+from dbprofile.checks.sample_rows import SampleRowsCheck
 from dbprofile.checks.schema_audit import SchemaAuditCheck
 from dbprofile.checks.temporal_consistency import TemporalConsistencyCheck
 from dbprofile.checks.uniqueness import UniquenessCheck
@@ -27,6 +28,7 @@ console = Console()
 ALL_CHECKS = {
     "schema_audit": SchemaAuditCheck,
     "row_count": RowCountCheck,
+    "sample_rows": SampleRowsCheck,
     "null_density": NullDensityCheck,
     "uniqueness": UniquenessCheck,
     "numeric_distribution": NumericDistributionCheck,
