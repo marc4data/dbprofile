@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -60,6 +60,8 @@ class ConnectionConfig(BaseModel):
     private_key_passphrase: str | None = None
     warehouse: str | None = None
     role: str | None = None
+    # DuckDB-specific
+    database_path: str | None = None   # path to .duckdb file; omit for in-memory
     # Generic DSN (postgres, mysql, etc.)
     dsn: str | None = None
 
@@ -110,6 +112,12 @@ class ChecksConfig(BaseModel):
     enabled: list[str] = ["all"]
     disabled: list[str] = []
     sample_rate: float = 1.0
+    sample_method: Literal["bernoulli", "system"] = "bernoulli"
+    """
+    Sampling method when sample_rate < 1.0:
+      bernoulli — row-level probability sampling; statistically uniform, slower on large tables
+      system    — block-level sampling; much faster on large tables, slightly less uniform
+    """
 
     @field_validator("sample_rate")
     @classmethod
@@ -122,6 +130,7 @@ class ChecksConfig(BaseModel):
 class ReportConfig(BaseModel):
     output: str = "./dbprofile_report.html"
     include: list[str] = ["tables", "charts"]
+    preview_rows: int = 25                      # max rows in the Data Preview table (1–1000)
     thresholds: CheckThresholds = CheckThresholds()
 
 

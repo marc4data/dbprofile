@@ -23,6 +23,7 @@ checks:
 report:
   output: ./reports/analytics_profile.html
   include: [tables, charts]
+  preview_rows: 15                     # max rows in Data Preview (default 25)
   thresholds:
     null_pct_warn: 10
     null_pct_critical: 50

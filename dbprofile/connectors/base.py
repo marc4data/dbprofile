@@ -30,6 +30,7 @@ class BaseConnector(ABC):
     """Common interface every dialect connector must implement."""
 
     dialect: str  # set in each subclass
+    sample_method: str = "bernoulli"  # set by get_connector() from config.checks.sample_method
 
     @abstractmethod
     def execute(self, sql: str) -> list[dict[str, Any]]:
@@ -56,11 +57,18 @@ class BaseConnector(ABC):
         return f"{schema}.{table}"
 
     def sample_clause(self, sample_rate: float) -> str:
-        """Return a TABLESAMPLE or WHERE RAND() clause, or empty string for 1.0."""
+        """Return a TABLESAMPLE clause, or empty string for sample_rate >= 1.0.
+
+        Method controlled by self.sample_method (set from config.checks.sample_method):
+          bernoulli — row-level probability sampling (default)
+          system    — block-level sampling (faster on large tables)
+        """
         if sample_rate >= 1.0:
             return ""
         pct = sample_rate * 100
-        return f"TABLESAMPLE SYSTEM ({pct:.2f} PERCENT)"
+        if self.sample_method == "system":
+            return f"TABLESAMPLE SYSTEM ({pct:.2f} PERCENT)"
+        return f"TABLESAMPLE BERNOULLI ({pct:.2f} PERCENT)"
 
     def date_trunc_day(self, col: str) -> str:
         """Truncate a timestamp column to day precision."""
@@ -117,11 +125,16 @@ ORDER BY 1
 class DuckDBConnector(BaseConnector):
     dialect = "duckdb"
 
-    def __init__(self, conn=None):
-        """Accept an existing duckdb connection (for tests) or create an in-memory one."""
+    def __init__(self, conn=None, database_path: str | None = None):
+        """Accept an existing duckdb connection (for tests), a file path, or create an in-memory one."""
         import duckdb
 
-        self._conn = conn if conn is not None else duckdb.connect(":memory:")
+        if conn is not None:
+            self._conn = conn
+        elif database_path:
+            self._conn = duckdb.connect(database_path)
+        else:
+            self._conn = duckdb.connect(":memory:")
 
     def execute(self, sql: str) -> list[dict[str, Any]]:
         result = self._conn.execute(sql)
@@ -147,6 +160,13 @@ ORDER BY ordinal_position
             f"WHERE table_schema = '{schema}' AND table_type = 'BASE TABLE'"
         )
         return [r["table_name"] for r in rows]
+
+    def sample_clause(self, sample_rate: float) -> str:
+        if sample_rate >= 1.0:
+            return ""
+        pct = sample_rate * 100
+        method = "SYSTEM" if self.sample_method == "system" else "BERNOULLI"
+        return f"USING SAMPLE {pct:.2f} PERCENT ({method})"
 
     def close(self) -> None:
         self._conn.close()
@@ -252,13 +272,15 @@ ORDER BY ordinal_position
         return f"DATE_TRUNC({col}, DAY)"
 
     def percentile_sql(self, col: str, table_ref: str, percentiles: list[float]) -> str:
-        # BigQuery percentile_cont requires window function form; wrap in a subquery
+        # BigQuery percentile_cont requires window function form.
+        # LIMIT must be on the outer query — BigQuery disallows LIMIT inside
+        # a subquery that contains window functions.
         select_parts = [
             f"PERCENTILE_CONT({col}, {p}) OVER () AS p{int(p * 100)}"
             for p in percentiles
         ]
-        inner = f"SELECT {', '.join(select_parts)} FROM {table_ref} LIMIT 1"
-        return f"SELECT * FROM ({inner})"
+        inner = f"SELECT {', '.join(select_parts)} FROM {table_ref}"
+        return f"SELECT * FROM ({inner}) LIMIT 1"
 
     def regex_match(self, col: str, pattern: str) -> str:
         escaped = pattern.replace("'", "\\'")
@@ -393,7 +415,9 @@ ORDER BY ordinal_position
         if sample_rate >= 1.0:
             return ""
         pct = sample_rate * 100
-        return f"SAMPLE ({pct:.2f})"
+        if self.sample_method == "system":
+            return f"SAMPLE SYSTEM ({pct:.2f})"
+        return f"SAMPLE BERNOULLI ({pct:.2f})"
 
     def date_trunc_day(self, col: str) -> str:
         return f"DATE_TRUNC('DAY', {col})"
@@ -444,18 +468,18 @@ def get_connector(config: "ProfileConfig") -> BaseConnector:
     dialect = config.connection.dialect.lower()
 
     if dialect == "duckdb":
-        return DuckDBConnector()
+        connector: BaseConnector = DuckDBConnector(database_path=config.connection.database_path)
 
-    if dialect == "bigquery":
-        return BigQueryConnector(
+    elif dialect == "bigquery":
+        connector = BigQueryConnector(
             project=config.connection.project,
             dataset=config.scope.dataset,
             credentials_path=config.connection.credentials_path,
             source_project=config.scope.project,
         )
 
-    if dialect == "snowflake":
-        return SnowflakeConnector(
+    elif dialect == "snowflake":
+        connector = SnowflakeConnector(
             account=config.connection.account,
             user=config.connection.user,
             database=config.scope.database,
@@ -466,7 +490,12 @@ def get_connector(config: "ProfileConfig") -> BaseConnector:
             private_key_passphrase=config.connection.private_key_passphrase,
         )
 
-    raise ValueError(
-        f"Unsupported dialect: '{dialect}'. "
-        "Supported dialects: bigquery, duckdb, snowflake"
-    )
+    else:
+        raise ValueError(
+            f"Unsupported dialect: '{dialect}'. "
+            "Supported dialects: bigquery, duckdb, snowflake"
+        )
+
+    # Plumb sampling method from config into connector
+    connector.sample_method = config.checks.sample_method
+    return connector

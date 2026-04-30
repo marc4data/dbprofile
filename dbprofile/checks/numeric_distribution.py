@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 from dbprofile.checks.base import BaseCheck, CheckResult
+
+
+def _nice_bounds(low: float, high: float) -> tuple[float, float]:
+    """Round fence boundaries outward to 'nice' numbers for clean axis labels."""
+    r = high - low
+    if r <= 0:
+        return low, high
+    magnitude = 10 ** math.floor(math.log10(r)) if r > 0 else 1
+    step = magnitude / 2  # round to half-magnitude intervals
+    return math.floor(low / step) * step, math.ceil(high / step) * step
 
 if TYPE_CHECKING:
     from dbprofile.config import ProfileConfig
@@ -34,21 +45,23 @@ class NumericDistributionCheck(BaseCheck):
         for col in numeric_cols:
             col_name = col["name"]
 
-            # Basic stats query
+            # Basic stats query — no explicit CAST; column is already numeric
+            # (filtered by is_numeric above). Most dialects handle integer→float
+            # promotion automatically in AVG/STDDEV.
             stats_sql = f"""
 SELECT
-  AVG(CAST({col_name} AS DOUBLE)) AS mean,
-  MIN(CAST({col_name} AS DOUBLE)) AS min_val,
-  MAX(CAST({col_name} AS DOUBLE)) AS max_val,
-  STDDEV(CAST({col_name} AS DOUBLE)) AS stddev,
+  AVG({col_name}) AS mean,
+  MIN({col_name}) AS min_val,
+  MAX({col_name}) AS max_val,
+  STDDEV({col_name}) AS stddev,
   COUNT(*) AS total,
   SUM(CASE WHEN {col_name} IS NULL THEN 1 ELSE 0 END) AS null_count
 FROM {table_ref} {sample}
 """.strip()
 
-            # Percentile query (dialect-aware)
+            # Percentile query (dialect-aware) — pass column name directly
             pct_sql = connector.percentile_sql(
-                f"CAST({col_name} AS DOUBLE)",
+                col_name,
                 f"{table_ref} {sample}".strip(),
                 _PERCENTILES,
             )
@@ -85,7 +98,7 @@ FROM {table_ref} {sample}
 SELECT COUNT(*) AS outlier_count
 FROM {table_ref} {sample}
 WHERE {col_name} IS NOT NULL
-  AND (CAST({col_name} AS DOUBLE) < {lower_fence} OR CAST({col_name} AS DOUBLE) > {upper_fence})
+  AND ({col_name} < {lower_fence} OR {col_name} > {upper_fence})
 """.strip()
 
                 outlier_rows = connector.execute(outlier_sql)
@@ -98,6 +111,86 @@ WHERE {col_name} IS NOT NULL
                     thresholds.outlier_pct_critical,
                 )
 
+                # ── Histogram within IQR fence (up to 20 bins) ──────────────
+                histogram = None
+                hist_range = upper_fence - lower_fence
+                if hist_range > 0 and non_null > 0:
+                    # Use IQR fence directly so bins cover the full ±1.5×IQR range
+                    hist_low = lower_fence
+                    hist_high = upper_fence
+                    num_bins = 20
+                    bin_width = hist_range / num_bins
+
+                    hist_sql = f"""
+SELECT
+  LEAST(
+    CAST(FLOOR(({col_name} - ({hist_low})) / ({bin_width})) AS INTEGER),
+    {num_bins - 1}
+  ) AS bin_num,
+  COUNT(*) AS cnt
+FROM {table_ref} {sample}
+WHERE {col_name} IS NOT NULL
+  AND {col_name} >= {hist_low}
+  AND {col_name} <= {hist_high}
+GROUP BY 1
+ORDER BY 1
+""".strip()
+                    try:
+                        hist_rows = connector.execute(hist_sql)
+                        bin_counts = {
+                            int(r["bin_num"]): int(r["cnt"])
+                            for r in hist_rows
+                            if r.get("bin_num") is not None and int(r["bin_num"]) >= 0
+                        }
+                        total_in_fence = sum(bin_counts.values())
+                        bins = []
+                        cumulative = 0.0
+                        for i in range(num_bins):
+                            count = bin_counts.get(i, 0)
+                            pct = round(100.0 * count / total_in_fence, 2) if total_in_fence > 0 else 0.0
+                            cumulative = round(cumulative + pct, 2)
+                            bl = hist_low + i * bin_width
+                            bh = hist_low + (i + 1) * bin_width
+                            bins.append({
+                                "bin": i,
+                                "low": round(bl, 4),
+                                "high": round(bh, 4),
+                                "center": round((bl + bh) / 2, 4),
+                                "count": count,
+                                "pct": pct,
+                                "cumulative_pct": cumulative,
+                            })
+                        histogram = {
+                            "bins": bins,
+                            "num_bins": num_bins,
+                            "bin_width": round(bin_width, 6),
+                            "hist_low": round(hist_low, 4),
+                            "hist_high": round(hist_high, 4),
+                            "total_in_fence": total_in_fence,
+                        }
+                    except Exception:
+                        pass  # histogram is supplementary — fail silently
+
+                detail: dict = {
+                    "mean": round(mean, 4),
+                    "min": round(min_val, 4),
+                    "max": round(max_val, 4),
+                    "stddev": round(stddev, 4),
+                    "p25": round(p25, 4),
+                    "p50": round(p50, 4),
+                    "p75": round(p75, 4),
+                    "p95": round(p95, 4),
+                    "p99": round(p99, 4),
+                    "iqr": round(iqr, 4),
+                    "lower_fence": round(lower_fence, 4),
+                    "upper_fence": round(upper_fence, 4),
+                    "outlier_count": outlier_count,
+                    "outlier_pct": outlier_pct,
+                    "total": total,
+                }
+                if histogram is not None:
+                    detail["histogram"] = histogram
+
                 results.append(
                     CheckResult(
                         table=table,
@@ -107,23 +200,7 @@ WHERE {col_name} IS NOT NULL
                         metric="outlier_pct",
                         value=outlier_pct,
                         severity=severity,
-                        detail={
-                            "mean": round(mean, 4),
-                            "min": round(min_val, 4),
-                            "max": round(max_val, 4),
-                            "stddev": round(stddev, 4),
-                            "p25": round(p25, 4),
-                            "p50": round(p50, 4),
-                            "p75": round(p75, 4),
-                            "p95": round(p95, 4),
-                            "p99": round(p99, 4),
-                            "iqr": round(iqr, 4),
-                            "lower_fence": round(lower_fence, 4),
-                            "upper_fence": round(upper_fence, 4),
-                            "outlier_count": outlier_count,
-                            "outlier_pct": outlier_pct,
-                            "total": total,
-                        },
+                        detail=detail,
                         sql=stats_sql + "\n---\n" + pct_sql,
                     )
                 )

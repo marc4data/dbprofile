@@ -3,597 +3,1616 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>dbprofile — {{ project }}.{{ dataset }}</title>
+<title>dbprofile — {{ project }}{% if dataset %}.{{ dataset }}{% endif %}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+/* Chart config registry — must be defined BEFORE any inline chart scripts below */
+var _chartCfg = {};
+var _chartInst = {};
+
+/* Box-whisker plugin for numeric distribution histograms.
+   Draws below the chart area, aligned to the same linear x-axis. */
+function _bwFmt(v) {
+  if (v === null || v === undefined) return '';
+  var a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1000) return parseFloat(v.toFixed(0)).toLocaleString();
+  if (a >= 100)  return parseFloat(v.toFixed(1)).toString();
+  if (a >= 10)   return parseFloat(v.toFixed(2)).toString();
+  return parseFloat(v.toFixed(3)).toString();
+}
+var _bwPlugin = {
+  id: 'boxWhisker',
+  afterDraw: function(chart) {
+    var opt = (chart.options.plugins || {}).boxWhisker;
+    if (!opt) return;
+    var ca = chart.chartArea;
+    var xScale = chart.scales['x'];
+    if (!xScale || !ca) return;
+    var ctx = chart.ctx;
+
+    var toX = function(v) {
+      var clamped = Math.max(opt.histLow, Math.min(opt.histHigh, v));
+      return xScale.getPixelForValue(clamped);
+    };
+
+    // Layout zones (relative to ca.bottom)
+    // Box-whisker sits below chart; labeled axis sits below box
+    var yTop     = ca.bottom + 24;  // box top
+    var yMid     = ca.bottom + 36;  // whisker midline
+    var yBot     = ca.bottom + 48;  // box bottom
+    var yCapT    = ca.bottom + 27;
+    var yCapB    = ca.bottom + 45;
+    var yBWLabel = ca.bottom + 60;  // P25/P50/P75 value labels (below box)
+    var yAxis    = ca.bottom + 72;  // labeled x-axis line (below everything)
+    var yTickBot = ca.bottom + 78;  // bottom of major tick mark
+    var yTickLbl = ca.bottom + 88;  // axis value labels
+
+    ctx.save();
+
+    // ── Box-whisker ───────────────────────────────────────────────
+    var wL = toX(opt.lf);
+    var wR = toX(opt.uf);
+    ctx.strokeStyle = '#9ca3af';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(wL, yMid);
+    ctx.lineTo(wR, yMid);
+    ctx.stroke();
+
+    [wL, wR].forEach(function(x) {
+      ctx.beginPath();
+      ctx.moveTo(x, yCapT);
+      ctx.lineTo(x, yCapB);
+      ctx.stroke();
+    });
+
+    var bL = toX(opt.p25);
+    var bR = toX(opt.p75);
+    ctx.fillStyle = 'rgba(137,220,235,.35)';
+    ctx.fillRect(bL, yTop, bR - bL, yBot - yTop);
+    ctx.strokeStyle = '#89dceb';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bL, yTop, bR - bL, yBot - yTop);
+
+    var mX = toX(opt.p50);
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(mX, yTop);
+    ctx.lineTo(mX, yBot);
+    ctx.stroke();
+
+    // P25 / P50 / P75 value labels below the box
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'center';
+    [[opt.p25, opt.p25], [opt.p50, opt.p50], [opt.p75, opt.p75]].forEach(function(pair) {
+      ctx.fillText(_bwFmt(pair[1]), toX(pair[0]), yBWLabel);
+    });
+
+    // ── Labeled x-axis below box ──────────────────────────────────
+    if (opt.binWidth && opt.numBins) {
+      var majorEvery = Math.max(1, Math.ceil(opt.numBins / 5)); // ~5 major ticks
+
+      // Axis line
+      ctx.strokeStyle = '#9ca3af';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(toX(opt.histLow), yAxis);
+      ctx.lineTo(toX(opt.histHigh), yAxis);
+      ctx.stroke();
+
+      for (var i = 0; i <= opt.numBins; i++) {
+        var tv = opt.histLow + i * opt.binWidth;
+        var tx = toX(tv);
+        var isMajor = (i % majorEvery === 0);
+
+        // Tick mark — major taller than minor
+        ctx.strokeStyle = isMajor ? '#6c7086' : '#c0c6d4';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(tx, yAxis);
+        ctx.lineTo(tx, isMajor ? yTickBot : yAxis + 3);
+        ctx.stroke();
+
+        // Label on major ticks
+        if (isMajor) {
+          ctx.fillStyle = '#6c7086';
+          ctx.font = '8px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(_bwFmt(tv), tx, yTickLbl);
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+};
+
+/* Bar-label plugin — draws pct values at the end of horizontal bars.
+   Activated per-chart via options.plugins.barLabels = { decimals: 1 } */
+var _barLabelPlugin = {
+  id: 'barLabels',
+  afterDraw: function(chart) {
+    var opt = (chart.options.plugins || {}).barLabels;
+    if (!opt) return;
+    var dec = opt.decimals !== undefined ? opt.decimals : 1;
+    var ctx = chart.ctx;
+    var ca = chart.chartArea;
+    chart.data.datasets.forEach(function(ds, i) {
+      var meta = chart.getDatasetMeta(i);
+      if (meta.hidden) return;
+      meta.data.forEach(function(bar, j) {
+        var val = ds.data[j];
+        if (val === null || val === undefined) return;
+        var x = bar.x + 4;
+        var y = bar.y;
+        if (x > ca.right - 2) return; // no room — skip
+        ctx.save();
+        ctx.fillStyle = '#4c5166';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(val.toFixed(dec) + '%', x, y);
+        ctx.restore();
+      });
+    });
+  }
+};
+</script>
 <style>
-  /* ── Reset & base ─────────────────────────────── */
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         font-size: 14px; color: #1a1a2e; background: #f8f9fb; display: flex;
-         min-height: 100vh; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;color:#1a1a2e;background:#f0f2f8;display:flex;min-height:100vh}
+code,pre{font-family:"SF Mono","Fira Code",Consolas,monospace;font-size:11px}
 
-  /* ── Sidebar ──────────────────────────────────── */
-  #sidebar {
-    width: 240px; min-width: 240px; background: #1a1a2e; color: #cdd6f4;
-    position: fixed; top: 0; left: 0; bottom: 0; overflow-y: auto;
-    display: flex; flex-direction: column; z-index: 100;
-  }
-  #sidebar .brand {
-    padding: 18px 16px 14px; font-size: 16px; font-weight: 700;
-    color: #89dceb; border-bottom: 1px solid #2a2a4a; letter-spacing: 0.5px;
-  }
-  #sidebar .brand small { display: block; font-size: 11px; font-weight: 400;
-    color: #6c7086; margin-top: 2px; }
-  #sidebar nav { flex: 1; padding: 10px 0; }
-  .nav-table { padding: 6px 12px; }
-  .nav-table a {
-    display: block; color: #cdd6f4; text-decoration: none; font-weight: 600;
-    font-size: 12px; padding: 4px 4px; border-radius: 4px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .nav-table a:hover { background: #2a2a4a; color: #89dceb; }
-  .nav-check { padding: 1px 12px 1px 22px; }
-  .nav-check a {
-    display: block; color: #6c7086; text-decoration: none; font-size: 11px;
-    padding: 2px 4px; border-radius: 3px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .nav-check a:hover { color: #cdd6f4; background: #2a2a4a; }
-  .nav-sev { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-    margin-right: 4px; vertical-align: middle; }
-  .nav-sev.critical { background: #f38ba8; }
-  .nav-sev.warn { background: #f9e2af; }
-  .nav-sev.ok { background: #a6e3a1; }
-  .nav-sev.info { background: #89dceb; }
+/* ── Sidebar ── */
+#sidebar{width:240px;min-width:240px;background:#1a1a2e;color:#cdd6f4;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;display:flex;flex-direction:column;z-index:100;border-right:1px solid #2a2a4a}
+#sidebar::-webkit-scrollbar{width:4px}
+#sidebar::-webkit-scrollbar-thumb{background:#313154;border-radius:2px}
+.brand{padding:14px 14px 12px;font-size:15px;font-weight:700;color:#89dceb;border-bottom:1px solid #2a2a4a;letter-spacing:.3px}
+.brand small{display:block;font-size:10px;font-weight:400;color:#6c7086;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sidebar nav{flex:1;padding:4px 0}
 
-  /* ── Main content ─────────────────────────────── */
-  #main { margin-left: 240px; flex: 1; min-width: 0; }
+/* Nav rows */
+.nav-table-row{border-bottom:1px solid #222244}
+.nav-table-header{display:flex;align-items:center;padding:5px 10px 5px 12px;gap:6px;cursor:pointer}
+.nav-table-header:hover{background:#232344}
+.nav-table-name{flex:1;font-size:11px;font-weight:600;color:#cdd6f4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-table-name a{color:inherit;text-decoration:none}
+.nav-circles{display:flex;gap:3px;align-items:center;flex-shrink:0}
+.nc{width:10px;height:10px;border-radius:50%;flex-shrink:0;cursor:pointer;border:1.5px solid rgba(255,255,255,0.42)}
+.nc.critical{background:#f38ba8}
+.nc.warn{background:#f9e2af}
+.nc.ok{background:#a6e3a1}
+.nc.info{background:#89dceb}
+.nc.na{background:#52526e}
+/* nav column-label header */
+.nav-col-header-row{display:flex;align-items:flex-end;padding:4px 10px 6px 12px;gap:6px;border-bottom:1px solid #222244;margin-bottom:2px}
+.nav-col-labels{display:flex;gap:3px;align-items:flex-end;flex-shrink:0}
+.nav-col-label{width:10px;display:flex;justify-content:center;overflow:visible;flex-shrink:0}
+.nav-col-label span{display:inline-block;transform:rotate(-90deg);transform-origin:center;font-size:9px;font-weight:700;color:#89a0be;letter-spacing:.03em;white-space:nowrap;line-height:1;margin-bottom:4px}
 
-  /* ── Sticky header ────────────────────────────── */
-  #topbar {
-    position: sticky; top: 0; z-index: 90; background: #fff;
-    border-bottom: 2px solid #e0e4ef; padding: 10px 24px;
-    display: flex; align-items: center; gap: 16px;
-  }
-  #topbar h1 { font-size: 15px; font-weight: 700; color: #1a1a2e; flex: 1; }
-  #topbar .run-meta { font-size: 11px; color: #6c7086; white-space: nowrap; }
-  #btn-issues-only {
-    padding: 5px 14px; background: #1a1a2e; color: #fff; border: none;
-    border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600;
-    transition: background 0.15s;
-  }
-  #btn-issues-only:hover { background: #f38ba8; }
-  #btn-issues-only.active { background: #f38ba8; }
+/* ── Main ── */
+#main{margin-left:240px;flex:1;min-width:0}
 
-  /* ── Summary cards ────────────────────────────── */
-  #summary { padding: 24px 24px 0; }
-  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
-  .card {
-    background: #fff; border-radius: 8px; padding: 16px 20px;
-    border: 1px solid #e0e4ef; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-  }
-  .card .label { font-size: 11px; font-weight: 600; color: #6c7086;
-    text-transform: uppercase; letter-spacing: 0.5px; }
-  .card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
-  .card.critical .value { color: #d20f39; }
-  .card.warn .value { color: #df8e1d; }
-  .card.ok .value { color: #40a02b; }
-  .card.neutral .value { color: #1a1a2e; }
+/* ── Topbar ── */
+#topbar{position:sticky;top:0;z-index:90;background:#fff;border-bottom:2px solid #e0e4ef;padding:9px 20px;display:flex;align-items:center;gap:14px}
+#topbar h1{font-size:14px;font-weight:700;color:#1a1a2e;flex:1}
+.run-meta{font-size:11px;color:#6c7086;white-space:nowrap}
+#btn-issues{padding:4px 12px;background:#1a1a2e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
+#btn-issues:hover,#btn-issues.active{background:#f38ba8;color:#1a1a2e}
 
-  /* ── Issues table ─────────────────────────────── */
-  .section { padding: 20px 24px; }
-  .section-title {
-    font-size: 16px; font-weight: 700; color: #1a1a2e;
-    margin-bottom: 12px; padding-bottom: 6px;
-    border-bottom: 2px solid #e0e4ef;
-  }
-  table.data-table {
-    width: 100%; border-collapse: collapse; font-size: 13px;
-    background: #fff; border-radius: 8px; overflow: hidden;
-    border: 1px solid #e0e4ef;
-  }
-  table.data-table thead th {
-    background: #f0f2f8; text-align: left; padding: 8px 12px;
-    font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.4px; color: #4c5166; border-bottom: 1px solid #e0e4ef;
-  }
-  table.data-table tbody td { padding: 7px 12px; border-bottom: 1px solid #f0f2f8; }
-  table.data-table tbody tr:hover { background: #f8f9fb; }
-  table.data-table tbody tr:last-child td { border-bottom: none; }
-  table.data-table tbody tr[data-anchor] { cursor: pointer; }
+/* ── Profile header banner ── */
+.profile-header{background:#fff;border-bottom:2px solid #e0e4ef;padding:10px 20px;display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+.ph-field{display:flex;flex-direction:column;gap:1px;min-width:80px}
+.ph-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af}
+.ph-value{font-size:12px;font-weight:600;color:#1a1a2e;white-space:nowrap}
+.ph-divider{width:1px;height:32px;background:#e0e4ef;flex-shrink:0}
 
-  /* ── Severity badges ──────────────────────────── */
-  .badge {
-    display: inline-block; padding: 2px 8px; border-radius: 10px;
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
-  }
-  .badge.critical { background: #fce8ec; color: #d20f39; }
-  .badge.warn     { background: #fef3cd; color: #b45309; }
-  .badge.ok       { background: #e8f8e8; color: #40a02b; }
-  .badge.info     { background: #e0f4f8; color: #0077a8; }
+/* Config panel — scope / checks / thresholds tree view */
+.config-panel{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-bottom:2px solid #e0e4ef;background:#fff}
+.config-col{padding:12px 20px;border-right:1px solid #e0e4ef}
+.config-col:last-child{border-right:none}
+.config-col-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#1a1a2e;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #e0e4ef}
+.cfg-tree{list-style:none;padding:0;margin:0}
+.cfg-tree li{font-size:10px;color:#4c5166;padding:2px 0 2px 10px;border-left:2px solid #e0e4ef;margin-left:4px;line-height:1.5}
+.cfg-tree li:last-child{border-left-color:transparent;position:relative}
+.cfg-tree li:last-child::before{content:'';position:absolute;left:-2px;top:0;width:2px;height:9px;background:#e0e4ef}
+.cfg-key{font-weight:700;color:#56779d;margin-right:4px}
+.cfg-val{color:#1a1a2e}
+/* Threshold table */
+table.cfg-thresh{width:100%;border-collapse:collapse;font-size:10px}
+table.cfg-thresh th{text-align:left;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#9ca3af;padding:0 4px 3px;border-bottom:1px solid #e0e4ef}
+table.cfg-thresh td{padding:3px 4px;border-bottom:1px solid #f0f2f8;vertical-align:middle}
+table.cfg-thresh td.cfg-key{font-size:10px;white-space:nowrap}
+.cfg-tv{font-weight:700;text-align:right;font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:32px}
+.cfg-tv.warn{color:#b45309}
+.cfg-tv.crit{color:#d20f39}
+.cfg-spark{width:40px;padding:3px 2px}
+.cfg-bar-track{width:100%;height:5px;background:#f0f2f8;border-radius:1px;overflow:hidden}
+.cfg-bar-fill{height:5px;border-radius:1px}
+.cfg-bar-fill.warn{background:#f9e2af}
+.cfg-bar-fill.crit{background:#f38ba8}
 
-  /* ── Table sections ───────────────────────────── */
-  .table-section {
-    margin: 0 24px 28px; background: #fff; border-radius: 10px;
-    border: 1px solid #e0e4ef; overflow: hidden;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-  }
-  .table-header {
-    background: #1a1a2e; color: #cdd6f4; padding: 12px 18px;
-    display: flex; align-items: center; gap: 12px;
-  }
-  .table-header h2 { font-size: 14px; font-weight: 700; color: #89dceb; flex: 1; }
-  .table-header .table-sev-pills { display: flex; gap: 8px; font-size: 12px; }
-  .pill { padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 11px; }
-  .pill.critical { background: #f38ba8; color: #1a1a2e; }
-  .pill.warn     { background: #f9e2af; color: #1a1a2e; }
-  .pill.ok       { background: #a6e3a1; color: #1a1a2e; }
+/* ── Executive summary ── */
+.exec-section{padding:20px 20px 0}
+.section-title{font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:14px;padding-bottom:6px;border-bottom:2px solid #e0e4ef}
+.metric-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin-bottom:18px}
+.metric-card{background:#fff;border-radius:6px;padding:14px 16px;border:1px solid #e0e4ef}
+.metric-card .label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6c7086}
+.metric-card .val{font-size:26px;font-weight:700;margin-top:3px}
+.metric-card .sub{font-size:9px;color:#9399b2;margin-top:2px}
+.metric-card.c-critical .val{color:#d20f39}
+.metric-card.c-warn .val{color:#b45309}
+.metric-card.c-ok .val{color:#40a02b}
+.metric-card.c-neutral .val{color:#1a1a2e}
+/* quality score ring */
+.score-ring{display:flex;align-items:center;gap:16px;margin-bottom:18px;background:#fff;border:1px solid #e0e4ef;border-radius:8px;padding:14px 20px}
+.score-circle{width:72px;height:72px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#1a1a2e;flex-shrink:0;border:3px solid currentColor}
+.score-details{flex:1;min-width:0}
+.score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6c7086;margin-bottom:4px}
+.score-breakdown{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.score-chip{font-size:9px;padding:2px 6px;border-radius:3px;background:#f0f2f8;color:#4c4f69;font-weight:600}
+.score-chip.ok{background:#d8f5d8;color:#2a6b2a}
+.score-chip.warn{background:#fef3c7;color:#92400e}
+.score-chip.crit{background:#fee2e2;color:#991b1b}
+/* Issue Scoreboard table — matches Data Preview styling */
+table.scoreboard-tbl{border-collapse:separate;border-spacing:0;font-size:11px;width:100%;table-layout:auto}
+table.scoreboard-tbl th{position:sticky;top:0;z-index:2;background:#f0f2f8;padding:4px 8px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#4c5166;border-top:1px solid #e0e4ef;border-right:1px solid #e0e4ef;border-bottom:2px solid #ccd0dc;white-space:nowrap;vertical-align:bottom;cursor:pointer;user-select:none}
+table.scoreboard-tbl th:first-child{border-left:1px solid #e0e4ef}
+table.scoreboard-tbl th:hover{background:#e8eaf0}
+table.scoreboard-tbl th.sort-asc::after{content:' ▲';font-size:8px}
+table.scoreboard-tbl th.sort-desc::after{content:' ▼';font-size:8px}
+table.scoreboard-tbl td{padding:3px 8px;border-right:1px solid #f0f2f8;border-bottom:1px solid #f0f2f8;color:#1a1a2e;vertical-align:middle}
+table.scoreboard-tbl td:first-child{border-left:1px solid #f0f2f8}
+table.scoreboard-tbl tbody tr:hover{background:#f8f9fb}
+.sb-num{text-align:right;color:#9ca3af;font-size:10px;min-width:24px;padding:3px 6px;background:#f8f9fb}
+.sb-left{text-align:left}
+.sb-right{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;color:#4c4f69;font-size:10px}
+.sb-center{text-align:center}
+.sb-name{font-weight:500;min-width:120px}
+.sb-name a{color:inherit;text-decoration:none}
+.sb-name a:hover{text-decoration:underline}
+.sb-score{text-align:center;font-weight:700;font-size:11px}
+table.scoreboard-tbl td.hm-cell{width:54px;height:22px;text-align:center;padding:0}
+table.scoreboard-tbl td.hm-cell a{display:block;width:100%;height:22px}
 
-  /* ── Heatmap scorecard ────────────────────────── */
-  .scorecard-wrap { overflow-x: auto; padding: 14px 18px; border-bottom: 1px solid #e0e4ef; }
-  .scorecard-title { font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.5px; color: #6c7086; margin-bottom: 8px; }
-  table.heatmap { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
-  table.heatmap th { padding: 3px 8px; color: #6c7086; font-weight: 600;
-    font-size: 10px; text-transform: uppercase; }
-  table.heatmap td.col-name { padding: 3px 10px 3px 0; color: #4c5166; font-weight: 500; }
-  table.heatmap td.cell {
-    width: 28px; height: 22px; text-align: center;
-    border-radius: 3px; margin: 1px;
-  }
-  .cell.critical { background: #f38ba8; }
-  .cell.warn     { background: #f9e2af; }
-  .cell.ok       { background: #a6e3a1; }
-  .cell.info     { background: #89dceb; }
-  .cell.na       { background: #e0e4ef; }
+/* Top actions */
+.top-actions{background:#fff;border:1px solid #e0e4ef;border-radius:6px;margin-bottom:18px;overflow:hidden}
+.top-actions-header{background:#f0f2f8;padding:8px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#4c5166;border-bottom:1px solid #e0e4ef}
+.action-item{display:flex;align-items:baseline;gap:10px;padding:8px 14px;border-bottom:1px solid #f0f2f8;font-size:12px}
+.action-item:last-child{border-bottom:none}
+.action-item a{color:#1a1a2e;text-decoration:none}
+.action-item a:hover{text-decoration:underline}
+.action-num{font-size:10px;font-weight:700;color:#6c7086;min-width:16px}
 
-  /* ── Check sub-sections ───────────────────────── */
-  .check-section { border-bottom: 1px solid #f0f2f8; }
-  .check-section:last-child { border-bottom: none; }
-  .check-header {
-    padding: 10px 18px; display: flex; align-items: center; gap: 10px;
-    cursor: pointer; user-select: none;
-  }
-  .check-header:hover { background: #f8f9fb; }
-  .check-name { font-size: 13px; font-weight: 600; color: #1a1a2e; flex: 1; }
-  .check-body { padding: 4px 18px 16px; display: none; }
-  .check-body.open { display: block; }
-  .check-toggle { color: #6c7086; font-size: 12px; transition: transform 0.15s; }
-  .check-toggle.open { transform: rotate(90deg); }
+/* Issue scoreboard (per-table, in exec summary) */
+.scoreboard-wrap{background:#fff;border:1px solid #e0e4ef;border-radius:6px;overflow:hidden;margin-bottom:12px}
+.scoreboard-table-name{background:#f0f2f8;padding:6px 14px;font-size:11px;font-weight:700;color:#1a1a2e;border-bottom:1px solid #e0e4ef;display:flex;align-items:center;gap:8px}
+.scoreboard-table-name a{color:inherit;text-decoration:none;flex:1}
+.scoreboard-table-name a:hover{text-decoration:underline}
+table.scoreboard{width:100%;border-collapse:collapse;font-size:12px}
+table.scoreboard td{padding:5px 14px;border-bottom:1px solid #f0f2f8;vertical-align:middle}
+table.scoreboard tr:last-child td{border-bottom:none}
+table.scoreboard tr:hover{background:#f8f9fb}
+.sb-check{color:#4c5166;font-weight:500;width:100%}
+.sb-crit{text-align:right;white-space:nowrap;font-weight:700;color:#d20f39;min-width:80px}
+.sb-crit.zero{color:#9ca3af;font-weight:400}
+.sb-warn{text-align:right;white-space:nowrap;font-weight:700;color:#b45309;min-width:80px}
+.sb-warn.zero{color:#9ca3af;font-weight:400}
 
-  /* ── Stat cards (inline) ──────────────────────── */
-  .stat-cards { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-  .stat-card {
-    background: #f8f9fb; border: 1px solid #e0e4ef; border-radius: 6px;
-    padding: 8px 14px; min-width: 120px;
-  }
-  .stat-card .s-label { font-size: 10px; color: #6c7086; font-weight: 600;
-    text-transform: uppercase; }
-  .stat-card .s-value { font-size: 18px; font-weight: 700; color: #1a1a2e; margin-top: 2px; }
+/* ── Data tables ── */
+table.dt{width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e0e4ef}
+table.dt thead th{background:#f0f2f8;text-align:left;padding:6px 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#4c5166;border-bottom:1px solid #e0e4ef;white-space:nowrap}
+table.dt tbody td{padding:5px 10px;border-bottom:1px solid #f0f2f8;vertical-align:middle}
+table.dt tbody tr:hover{background:#f8f9fb}
+table.dt tbody tr:last-child td{border-bottom:none}
+table.dt tbody tr[data-anchor]{cursor:pointer}
 
-  /* ── Chart containers ─────────────────────────── */
-  .chart-wrap { max-width: 680px; margin: 12px 0; position: relative; height: 220px; }
+/* ── Badges ── */
+.badge{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.2px}
+.badge.critical{background:#fce8ec;color:#d20f39}
+.badge.warn{background:#fef3cd;color:#b45309}
+.badge.ok{background:#e8f8e8;color:#40a02b}
+.badge.info{background:#e0f4f8;color:#0077a8}
+.badge.na{background:#f0f2f8;color:#6c7086}
 
-  /* ── Issues-only mode ─────────────────────────── */
-  body.issues-only .check-section.all-ok { display: none; }
-  body.issues-only .table-section.all-ok { display: none; }
+/* ── Table sections ── */
+/* scroll-margin-top accounts for the sticky topbar (~46px) + breathing room */
+.table-section{margin:16px 20px;background:#fff;border-radius:8px;border:1px solid #e0e4ef;overflow:visible;box-shadow:0 1px 3px rgba(0,0,0,.04);scroll-margin-top:60px}
+.table-header{background:#1a1a2e;color:#cdd6f4;padding:10px 16px;display:flex;align-items:center;gap:10px;position:relative;z-index:10}
+.table-header h2{font-size:13px;font-weight:700;color:#89dceb;flex:1}
+.sev-pill{padding:2px 9px;border-radius:8px;font-size:10px;font-weight:700}
+.sev-pill.critical{background:#f38ba8;color:#1a1a2e}
+.sev-pill.warn{background:#f9e2af;color:#1a1a2e}
+.sev-pill.ok{background:#a6e3a1;color:#1a1a2e}
 
-  /* ── Scrollbar ────────────────────────────────── */
-  #sidebar::-webkit-scrollbar { width: 4px; }
-  #sidebar::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 2px; }
+/* Summary card (per table) */
+.summary-card{padding:14px 16px;border-bottom:1px solid #e0e4ef;background:#f8f9fb}
+.summary-meta{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:#6c7086;margin-bottom:8px}
+.summary-meta strong{color:#1a1a2e;font-weight:600}
+.summary-scorecard{display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.scorecard-pill{padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600}
+.scorecard-pill.critical{background:#fce8ec;color:#d20f39}
+.scorecard-pill.warn{background:#fef3cd;color:#b45309}
+.scorecard-pill.ok{background:#e8f8e8;color:#40a02b}
+.summary-text{font-size:12px;color:#4c5166;line-height:1.5;margin-bottom:8px}
+.quick-links{display:flex;flex-wrap:wrap;gap:6px}
+.quick-link{font-size:10px;font-weight:600;color:#1a1a2e;text-decoration:none;padding:2px 8px;background:#e8eaf0;border-radius:4px}
+.quick-link:hover{background:#d0d4e8}
+.quick-link.critical{background:#fce8ec;color:#d20f39}
+.quick-link.warn{background:#fef3cd;color:#b45309}
+.back-link{font-size:10px;color:#6c7086;text-decoration:none}
+.back-link:hover{color:#1a1a2e}
+.expand-all-btn{padding:2px 8px;background:rgba(137,220,235,0.12);color:#89dceb;border:1px solid rgba(137,220,235,0.35);border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;flex-shrink:0}
+.expand-all-btn:hover{background:rgba(137,220,235,0.22);color:#cffafe}
+/* Action icons — consistent bright cyan across all contexts */
+.hdr-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;font-size:14px;color:#22d3ee;text-decoration:none;border-radius:3px;flex-shrink:0;line-height:1;transition:background .12s,color .12s,box-shadow .12s}
+.hdr-icon-btn:hover{background:rgba(34,211,238,0.14);color:#06b6d4;box-shadow:inset 0 0 0 1px rgba(34,211,238,0.35)}
+/* Icon buttons on dark/blue headers */
+.table-header .hdr-icon-btn,.check-header .hdr-icon-btn{color:#89dceb}
+.table-header .hdr-icon-btn:hover,.check-header .hdr-icon-btn:hover{background:rgba(137,220,235,0.18);color:#cffafe;box-shadow:inset 0 0 0 1px rgba(137,220,235,0.3)}
+/* Subgroup headers (Null Density violators/ok, etc.) */
+.subgroup-hdr{padding:5px 14px;font-size:11px;font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;border-bottom:1px solid rgba(0,0,0,.06);margin-top:6px;user-select:none}
+.subgroup-hdr:hover{filter:brightness(.97)}
+.subgroup-hdr.sg-violators{background:#dbeafe;color:#1e40af}
+.subgroup-hdr.sg-ok{background:#dcfce7;color:#166534}
+.subgroup-toggle{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;font-size:10px;flex-shrink:0;color:#22d3ee;border-radius:3px;transition:transform .12s,background .12s,box-shadow .12s}
+.subgroup-toggle:hover{background:rgba(34,211,238,0.16);box-shadow:inset 0 0 0 1px rgba(34,211,238,0.35)}
+.subgroup-body{display:none}
+.subgroup-body.sg-open{display:block}
+/* Column meta strip (Frequency / Temporal sections) */
+.col-meta-strip{display:flex;align-items:center;gap:10px;padding:6px 0 4px;border-bottom:1px solid #f0f2f8;margin-bottom:6px;font-size:11px}
+.cms-ord{color:#9ca3af;font-size:10px;min-width:18px;text-align:right;flex-shrink:0}
+.cms-name{font-weight:600;color:#1a1a2e}
+.cms-type code{font-size:10px;color:#4c5166}
+.cms-nullable-n{font-weight:700;color:#1a1a2e;font-size:10px}
+.cms-nullable-y{color:#1a1a2e;opacity:0.28;font-size:10px}
+.cms-shape{display:flex;align-items:center;flex-shrink:0}
+
+/* Heatmap full width on top, data preview stacked below */
+.heatmap-preview-container{display:flex;flex-direction:column;border-bottom:1px solid #e0e4ef}
+.heatmap-side{overflow-x:auto;overflow-y:visible;padding:12px 16px}
+.preview-side{padding:12px 16px;border-top:1px solid #e0e4ef}
+.preview-side-empty{display:none}
+/* Preview scroll: ~20 rows visible (~460px), vertical scroll for the rest */
+.preview-scroll{overflow-x:auto;overflow-y:auto;max-height:460px;border:1px solid #e0e4ef;border-radius:3px}
+.preview-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6c7086;margin-bottom:6px;flex-shrink:0}
+table.preview-tbl{border-collapse:separate;border-spacing:0;font-size:11px;table-layout:auto;width:100%}
+table.preview-tbl th{position:sticky;top:0;z-index:2;background:#f0f2f8;padding:3px 8px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#4c5166;border-top:1px solid #e0e4ef;border-right:1px solid #e0e4ef;border-bottom:2px solid #ccd0dc;white-space:normal;word-break:normal;overflow-wrap:normal;vertical-align:bottom;cursor:pointer;user-select:none}
+table.preview-tbl th:hover{background:#e8eaf0}
+table.preview-tbl th.sort-asc::after{content:' ▲';font-size:8px;opacity:1}
+table.preview-tbl th.sort-desc::after{content:' ▼';font-size:8px;opacity:1}
+table.preview-tbl th:first-child{border-left:1px solid #e0e4ef}
+table.preview-tbl td{padding:3px 8px;border-right:1px solid #f0f2f8;border-bottom:1px solid #f0f2f8;color:#1a1a2e;vertical-align:top}
+table.preview-tbl td:first-child{border-left:1px solid #f0f2f8}
+table.preview-tbl tbody tr:hover{background:#f8f9fb}
+table.preview-tbl td.null-val{color:#bbb;font-style:italic}
+table.preview-tbl td.row-num{color:#9ca3af;font-size:10px;text-align:right;background:#f8f9fb;padding:3px 6px;white-space:nowrap;border-right:1px solid #e0e4ef}
+table.preview-tbl th.row-num-hdr{color:#9ca3af;background:#f0f2f8;text-align:right;min-width:28px;white-space:nowrap}
+table.preview-tbl th.num-hdr{text-align:right}
+table.preview-tbl td.num-cell{text-align:right;font-variant-numeric:tabular-nums}
+/* Datetime/timestamp cells: break only at the space between date and time, never within date or time */
+table.preview-tbl td.dt-cell{word-break:keep-all;white-space:normal;max-height:calc(2lh + 6px);overflow:hidden}
+/* Heatmap */
+.heatmap-wrap{overflow-x:auto;padding:12px 16px}
+.heatmap-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6c7086;margin-bottom:4px}
+table.heatmap{border-collapse:separate;border-spacing:0;font-size:11px;white-space:nowrap}
+table.heatmap th{position:sticky;top:46px;z-index:2;padding:2px 6px;color:#6c7086;font-weight:700;font-size:9px;text-transform:uppercase;background:#f0f2f8;border-bottom:2px solid #ccd0dc;border-right:1px solid #e0e4ef;border-top:1px solid #e0e4ef;text-align:center;cursor:pointer;user-select:none}
+table.heatmap th:first-child{border-left:1px solid #e0e4ef}
+table.heatmap th.col-left{text-align:left}
+table.heatmap th:hover{background:#e8eaf0}
+table.heatmap th.sort-asc::after{content:' ▲';font-size:8px}
+table.heatmap th.sort-desc::after{content:' ▼';font-size:8px}
+/* Check column headers — word-wrapped label + short abbreviation below */
+table.heatmap th.hm-check-hdr{padding:4px 3px;vertical-align:bottom;width:48px;min-width:48px;white-space:normal;word-wrap:break-word;line-height:1.2;font-size:8px;text-align:center}
+table.heatmap th.hm-check-hdr .hdr-short{display:block;font-size:9px;font-weight:800;color:#4c5166;margin-top:2px;letter-spacing:.3px}
+table.heatmap td{border-right:1px solid #e8eaef;border-bottom:1px solid #e8eaef;padding:0}
+table.heatmap td:first-child{border-left:1px solid #e8eaef}
+table.heatmap td.meta-num{padding:2px 6px;color:#6c7086;font-size:10px;text-align:right;background:#f8f9fb}
+table.heatmap td.meta-type{padding:2px 6px;background:#f8f9fb}
+table.heatmap td.meta-spark{padding:1px 4px;background:#f8f9fb}
+table.heatmap td.meta-name{padding:2px 8px;font-weight:500;color:#1a1a2e;font-size:11px;background:#fff;min-width:100px;cursor:help}
+table.heatmap td.meta-nullable-n{padding:2px 6px;background:#f8f9fb;font-weight:700;color:#1a1a2e;font-size:10px;text-align:center}
+table.heatmap td.meta-nullable-y{padding:2px 6px;background:#f8f9fb;color:#1a1a2e;opacity:0.28;font-size:10px;text-align:center}
+table.heatmap td.hm-cell{width:26px;height:20px;text-align:center;padding:0}
+table.heatmap td.hm-cell a{display:block;width:100%;height:20px}
+.hm-cell.critical{background:#f38ba8}
+.hm-cell.warn{background:#f9e2af}
+.hm-cell.ok{background:#a6e3a1}
+.hm-cell.info{background:#89dceb}
+.hm-cell.na{background:#f0f2f8}
+/* Heatmap legend */
+.heatmap-legend{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:4px 0 8px;font-size:10px;color:#4c5166;border-bottom:1px solid #f0f2f8;margin-bottom:6px}
+.hl-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.hl-swatch{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.hl-dot{width:10px;height:10px;border-radius:2px;flex-shrink:0;display:inline-block}
+.hl-dot.critical{background:#f38ba8}
+.hl-dot.warn{background:#f9e2af}
+.hl-dot.ok{background:#a6e3a1}
+.hl-dot.na{background:#f0f2f8;border:1px solid #d0d4df}
+.hl-sep{color:#d0d4df;margin:0 2px}
+.hl-abbr{white-space:nowrap;color:#6c7086}
+
+/* Check sections */
+.check-section{border-bottom:1px solid #f0f2f8;scroll-margin-top:60px}
+.check-section:last-child{border-bottom:none}
+.check-header{padding:8px 16px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;background:#56779d}
+.check-header:hover{background:#5980ab}
+.check-title{font-size:12px;font-weight:600;color:#89dceb;flex:1}
+.check-headline{font-size:11px;color:#7aaed6;font-style:italic;margin-left:4px}
+.check-toggle{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;color:#89dceb;font-size:12px;border-radius:3px;transition:transform .15s,background .12s,box-shadow .12s}
+.check-toggle:hover{background:rgba(137,220,235,0.2);box-shadow:inset 0 0 0 1px rgba(137,220,235,0.35)}
+.check-toggle.open{transform:rotate(90deg)}
+.check-body{display:none;padding:4px 16px 14px}
+.check-body.open{display:block}
+
+/* Standard leading columns shared across all check tables */
+table.dt td.col-ord{color:#6c7086;font-size:10px;text-align:right;padding-right:8px;width:28px}
+table.dt td.col-name{font-weight:600;min-width:100px}
+table.dt td.col-type{font-size:10px;color:#4c5166;white-space:nowrap}
+table.dt td.col-nullable-n{font-weight:700;color:#1a1a2e;font-size:11px;text-align:center}
+table.dt td.col-nullable-y{color:#1a1a2e;opacity:.3;font-size:11px;text-align:center}
+table.dt td.col-shape{padding:2px 6px}
+/* Right-align all numeric value cells */
+table.dt td.tnum{text-align:right;font-variant-numeric:tabular-nums}
+table.dt th.tnum{text-align:right}
+/* Inline null bar */
+.null-bar-wrap{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.null-bar-track{width:60px;height:6px;background:#f0f2f8;border-radius:1px;overflow:hidden;flex-shrink:0;border:1px solid #ccd0dc}
+.null-bar-fill{height:4px;border-radius:0}
+
+/* Stat row */
+.stat-row{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px}
+.stat-item{background:#f8f9fb;border:1px solid #e0e4ef;border-radius:5px;padding:6px 12px;min-width:100px}
+.stat-item .s-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6c7086}
+.stat-item .s-val{font-size:17px;font-weight:700;color:#1a1a2e;margin-top:1px}
+
+/* Chart wrap */
+.chart-wrap{position:relative;margin:8px 0}
+
+/* Null density specifics */
+.ok-toggle-btn{font-size:10px;color:#6c7086;background:#f0f2f8;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;margin:6px 0 4px}
+.ok-toggle-btn:hover{background:#e0e4ef}
+.ok-rows{display:none}
+.ok-rows.open{display:table-row-group}
+
+/* Uniqueness sections */
+.uniq-section-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#4c5166;margin:10px 0 4px;padding:5px 10px;border-radius:3px}
+.uniq-label-identifier{background:#dbeafe;color:#1e40af}
+.uniq-label-attribute{background:#dcfce7;color:#166534}
+.attr-note{font-size:11px;color:#6c7086;font-style:italic;padding:4px 8px;margin-bottom:6px}
+
+/* Numeric table */
+table.numeric-table{width:100%;border-collapse:collapse;font-size:11px}
+table.numeric-table thead th{background:#f0f2f8;padding:5px 8px;text-align:right;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#4c5166;border-bottom:1px solid #e0e4ef;white-space:nowrap}
+table.numeric-table thead th:first-child,table.numeric-table thead th:nth-child(2),table.numeric-table thead th:nth-child(3){text-align:left}
+table.numeric-table tbody td{padding:5px 8px;border-bottom:1px solid #f0f2f8;text-align:right;vertical-align:middle}
+table.numeric-table tbody td:first-child,table.numeric-table tbody td:nth-child(2),table.numeric-table tbody td:nth-child(3){text-align:left}
+table.numeric-table tbody tr.num-row{cursor:pointer}
+table.numeric-table tbody tr.num-row:hover{background:#f8f9fb}
+table.numeric-table tbody tr.num-detail td{padding:8px 8px 12px;background:#f8f9fb}
+.expand-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-size:11px;color:#22d3ee;margin-right:3px;border-radius:3px;transition:background .12s,color .12s,box-shadow .12s,transform .12s;flex-shrink:0;vertical-align:middle}
+.expand-icon:hover{background:rgba(34,211,238,0.14);color:#06b6d4;box-shadow:inset 0 0 0 1px rgba(34,211,238,0.35)}
+
+/* Frequency specifics */
+.freq-binary{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.freq-pill{padding:4px 14px;border-radius:16px;font-size:12px;font-weight:600}
+.freq-pill-1{background:#a6e3a1;color:#1a1a2e}
+.freq-pill-0{background:#f2d5cf;color:#1a1a2e}
+.freq-pill-other{background:#e8eaf0;color:#4c5166}
+.freq-note{font-size:10px;color:#6c7086;margin-bottom:6px;font-style:italic}
+
+/* Temporal */
+.temporal-summary{font-size:12px;color:#4c5166;line-height:1.5;margin-bottom:10px;padding:6px 10px;background:#f8f9fb;border-left:3px solid #89dceb;border-radius:2px}
+
+/* Issues-only mode */
+body.issues-only .check-section.all-ok{display:none}
+body.issues-only .table-section.all-ok{display:none}
+/* Frequency distribution trellis */
+.freq-trellis{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-flow:column;gap:0 16px}
+.freq-trellis-item{padding-bottom:12px}
+/* Temporal KPI + chart side-by-side */
+.temporal-kpi-chart{display:flex;gap:12px;align-items:flex-start;margin-top:4px}
+.temporal-kpi-stack{display:flex;flex-direction:column;gap:6px;flex-shrink:0;min-width:110px}
+.temporal-kpi-stack .stat-item{min-width:0}
+.temporal-chart-area{flex:1;min-width:0}
 </style>
 </head>
 <body>
 
-<!-- ═══════════════════════════════════════════════════════════ SIDEBAR -->
+<!-- ══════════════════════════ SIDEBAR ══════════════════════════ -->
 <aside id="sidebar">
   <div class="brand">
     dbprofile
     <small>{{ project }}{% if dataset %}.{{ dataset }}{% endif %}</small>
   </div>
   <nav>
-    <div class="nav-table"><a href="#summary">&#9654; Executive Summary</a></div>
+    <div class="nav-table-row">
+      <div class="nav-table-header" onclick="document.getElementById('summary').scrollIntoView({behavior:'smooth'})">
+        <span class="nav-table-name">&#9776; Executive Summary</span>
+      </div>
+    </div>
+
+    <!-- Column label header row -->
+    <div class="nav-col-header-row">
+      <span style="flex:1"></span>
+      <span class="nav-col-labels">
+        {% for cn in canonical_order %}
+        <span class="nav-col-label"><span>{{ nav_labels[cn] }}</span></span>
+        {% endfor %}
+      </span>
+    </div>
+
     {% for table in tables %}
-    <div class="nav-table">
-      <a href="#table-{{ table }}">{{ table }}</a>
+    {% set tc = tables_ctx[table] %}
+    <div class="nav-table-row">
+      <div class="nav-table-header" onclick="jumpTo('table-{{ table }}')">
+        <span class="nav-table-name">
+          <a href="#table-{{ table }}" onclick="event.stopPropagation()">{{ table }}</a>
+        </span>
+        <span class="nav-circles">
+          {% for cn in canonical_order %}
+          {% set sev = tc.check_worst[cn] %}
+          <span class="nc {{ sev }}" title="{{ check_labels[cn] }}: {{ sev }}"
+                onclick="event.stopPropagation(); jumpTo('{{ table }}-{{ cn }}')"></span>
+          {% endfor %}
+        </span>
+      </div>
     </div>
-    {% set td = tables_data[table] %}
-    {% for check_name, check_results in td.checks.items() %}
-    {% set worst = namespace(sev='ok') %}
-    {% for r in check_results %}
-      {% if r.severity == 'critical' %}{% set worst.sev = 'critical' %}
-      {% elif r.severity == 'warn' and worst.sev != 'critical' %}{% set worst.sev = 'warn' %}
-      {% endif %}
-    {% endfor %}
-    <div class="nav-check">
-      <a href="#{{ table }}-{{ check_name }}">
-        <span class="nav-sev {{ worst.sev }}"></span>{{ check_name | replace('_', ' ') }}
-      </a>
-    </div>
-    {% endfor %}
     {% endfor %}
   </nav>
 </aside>
 
-<!-- ═══════════════════════════════════════════════════════════ TOPBAR -->
+<!-- ══════════════════════════ MAIN ══════════════════════════════ -->
 <div id="main">
 <div id="topbar">
   <h1>dbprofile report</h1>
-  <span class="run-meta">{{ run_at }} &nbsp;|&nbsp; {{ sample_rate_pct }} sample</span>
-  <button id="btn-issues-only" onclick="toggleIssuesOnly(this)">Issues only</button>
+  <span class="run-meta">{{ run_at }} &nbsp;·&nbsp; {{ sample_rate_pct }} sample</span>
+  <button id="btn-issues" onclick="toggleIssuesOnly(this)">Issues only</button>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════ SUMMARY -->
-<div id="summary" class="section">
+<!-- ═══ PROFILE HEADER BANNER ════════════════════════════════════ -->
+<div class="profile-header">
+  <div class="ph-field">
+    <span class="ph-label">Connector</span>
+    <span class="ph-value">{{ dialect_display }}</span>
+  </div>
+  <div class="ph-divider"></div>
+  <div class="ph-field">
+    <span class="ph-label">Account</span>
+    <span class="ph-value">{{ account_display }}</span>
+  </div>
+  <div class="ph-divider"></div>
+  <div class="ph-field">
+    <span class="ph-label">Database</span>
+    <span class="ph-value">{{ database_display }}</span>
+  </div>
+  <div class="ph-divider"></div>
+  <div class="ph-field">
+    <span class="ph-label">Schema</span>
+    <span class="ph-value">{{ schema_display }}</span>
+  </div>
+  <div class="ph-divider"></div>
+  <div class="ph-field">
+    <span class="ph-label">Role</span>
+    <span class="ph-value">{{ role_display }}</span>
+  </div>
+  <div class="ph-divider"></div>
+  <div class="ph-field">
+    <span class="ph-label">Profiled At</span>
+    <span class="ph-value">{{ run_at }}</span>
+  </div>
+  <div class="ph-divider"></div>
+  <div class="ph-field">
+    <span class="ph-label">Sample</span>
+    <span class="ph-value">{{ sample_rate_pct }}</span>
+  </div>
+</div>
+
+<!-- ═══ CONFIG PANEL — scope / checks / thresholds ═══════════════ -->
+<div class="config-panel">
+
+  <div class="config-col">
+    <div class="config-col-title">Scope</div>
+    <ul class="cfg-tree">
+      <li><span class="cfg-key">Database</span> <span class="cfg-val">{{ cfg_scope.database }}</span></li>
+      <li><span class="cfg-key">Schemas</span> <span class="cfg-val">{{ cfg_scope.schemas }}</span></li>
+      <li><span class="cfg-key">Tables</span> <span class="cfg-val">{{ cfg_scope.tables }}</span></li>
+      <li><span class="cfg-key">Exclude</span> <span class="cfg-val">{{ cfg_scope.exclude_tables }}</span></li>
+    </ul>
+  </div>
+
+  <div class="config-col">
+    <div class="config-col-title">Checks</div>
+    <ul class="cfg-tree">
+      <li><span class="cfg-key">Enabled</span> <span class="cfg-val">{{ cfg_checks.enabled }}</span></li>
+      <li><span class="cfg-key">Disabled</span> <span class="cfg-val">{{ cfg_checks.disabled }}</span></li>
+      <li><span class="cfg-key">Sample Rate</span> <span class="cfg-val">{{ cfg_checks.sample_rate }}</span></li>
+      <li><span class="cfg-key">Sample Method</span> <span class="cfg-val">{{ cfg_checks.sample_method }}</span></li>
+    </ul>
+  </div>
+
+  <div class="config-col">
+    <div class="config-col-title">Thresholds</div>
+    <table class="cfg-thresh">
+      <thead>
+        <tr><th>Check</th><th>Warn</th><th></th><th>Crit</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for label, warn_val, crit_val in [
+            ('Null %', cfg_thresholds.null_pct_warn, cfg_thresholds.null_pct_critical),
+            ('Duplicate %', cfg_thresholds.duplicate_pct_warn, cfg_thresholds.duplicate_pct_critical),
+            ('Outlier %', cfg_thresholds.outlier_pct_warn, cfg_thresholds.outlier_pct_critical),
+        ] %}
+        <tr>
+          <td class="cfg-key">{{ label }}</td>
+          <td class="cfg-tv warn">{{ warn_val }}%</td>
+          <td class="cfg-spark"><div class="cfg-bar-track"><div class="cfg-bar-fill warn" style="width:{{ [warn_val, 100] | min }}%"></div></div></td>
+          <td class="cfg-tv crit">{{ crit_val }}%</td>
+          <td class="cfg-spark"><div class="cfg-bar-track"><div class="cfg-bar-fill crit" style="width:{{ [crit_val, 100] | min }}%"></div></div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<!-- ═══ EXECUTIVE SUMMARY ════════════════════════════════════════ -->
+<div id="summary" class="exec-section">
   <div class="section-title">Executive Summary</div>
-  <div class="cards">
-    <div class="card neutral">
-      <div class="label">Tables profiled</div>
-      <div class="value">{{ total_tables }}</div>
+
+  <!-- Quality score ring -->
+  {% set sc_color = score_color(overall_quality_score) %}
+  <div class="score-ring">
+    <div class="score-circle" style="color:{{ sc_color }};border-color:{{ sc_color }};background:{{ sc_color }}22">
+      {{ overall_quality_score }}
     </div>
-    <div class="card neutral">
-      <div class="label">Columns profiled</div>
-      <div class="value">{{ total_columns }}</div>
+    <div class="score-details">
+      <div class="score-label">Overall Quality Score</div>
+      <div style="font-size:11px;color:#4c4f69">
+        {% if overall_quality_score >= 90 %}Excellent — data is in good shape.
+        {% elif overall_quality_score >= 75 %}Good — minor issues to review.
+        {% elif overall_quality_score >= 60 %}Fair — several issues need attention.
+        {% else %}Poor — significant data quality problems detected.
+        {% endif %}
+      </div>
+      <div style="font-size:10px;color:#9399b2;margin-top:4px">
+        {{ overall_coverage_pct }}% check coverage &nbsp;·&nbsp;
+        {{ "{:,}".format(total_rows) }} rows total &nbsp;·&nbsp;
+        {{ "{:,}".format(total_rows_sampled) }} sampled
+      </div>
     </div>
-    <div class="card {% if critical_count > 0 %}critical{% else %}ok{% endif %}">
-      <div class="label">Critical issues</div>
-      <div class="value">{{ critical_count }}</div>
+  </div>
+
+  <div class="metric-cards">
+    <div class="metric-card c-neutral">
+      <div class="label">Tables</div>
+      <div class="val">{{ total_tables }}</div>
     </div>
-    <div class="card {% if warn_count > 0 %}warn{% else %}ok{% endif %}">
+    <div class="metric-card c-neutral">
+      <div class="label">Columns</div>
+      <div class="val">{{ total_columns }}</div>
+    </div>
+    <div class="metric-card c-neutral">
+      <div class="label">Total Rows</div>
+      <div class="val" style="font-size:18px">{{ "{:,}".format(total_rows) }}</div>
+      <div class="sub">{{ "{:,}".format(total_rows_sampled) }} sampled</div>
+    </div>
+    <div class="metric-card {% if critical_count > 0 %}c-critical{% else %}c-ok{% endif %}">
+      <div class="label">Critical</div>
+      <div class="val">{{ critical_count }}</div>
+    </div>
+    <div class="metric-card {% if warn_count > 0 %}c-warn{% else %}c-ok{% endif %}">
       <div class="label">Warnings</div>
-      <div class="value">{{ warn_count }}</div>
+      <div class="val">{{ warn_count }}</div>
     </div>
   </div>
 
-  {% if issues %}
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Table</th><th>Check</th><th>Column</th>
-        <th>Severity</th><th>Metric</th><th>Value</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for issue in issues %}
-      <tr data-anchor="#{{ issue.anchor }}" onclick="jumpTo('{{ issue.anchor }}')">
-        <td>{{ issue.table }}</td>
-        <td>{{ issue.check | replace('_', ' ') }}</td>
-        <td>{{ issue.column }}</td>
-        <td><span class="badge {{ issue.severity }}">{{ issue.severity }}</span></td>
-        <td>{{ issue.metric }}</td>
-        <td>{{ issue.value }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p style="color:#40a02b;font-weight:600;padding:12px 0;">&#10003; No warnings or critical issues found.</p>
+  <!-- Top Actions -->
+  {% if top_actions %}
+  <div class="top-actions">
+    <div class="top-actions-header">&#9650; Top Actions</div>
+    {% for action in top_actions %}
+    <div class="action-item">
+      <span class="action-num">{{ loop.index }}</span>
+      <span class="badge {{ action.severity }}">{{ action.severity }}</span>
+      <a href="#{{ action.anchor }}" onclick="jumpTo('{{ action.anchor }}'); return false;">
+        {{ action.text }}
+      </a>
+    </div>
+    {% endfor %}
+  </div>
   {% endif %}
-</div>
 
-<!-- ═══════════════════════════════════════════════════════════ PER-TABLE -->
-{% for table in tables %}
-{% set td = tables_data[table] %}
-{% set sc = td.severity_counts %}
-{% set table_has_issues = sc.critical > 0 or sc.warn > 0 %}
-
-<div id="table-{{ table }}"
-     class="table-section {% if not table_has_issues %}all-ok{% endif %}">
-
-  <!-- Table header bar -->
-  <div class="table-header">
-    <h2>{{ table }}</h2>
-    <div class="table-sev-pills">
-      {% if sc.critical > 0 %}
-        <span class="pill critical">{{ sc.critical }} critical</span>
-      {% endif %}
-      {% if sc.warn > 0 %}
-        <span class="pill warn">{{ sc.warn }} warn</span>
-      {% endif %}
-      {% if sc.critical == 0 and sc.warn == 0 %}
-        <span class="pill ok">all clear</span>
-      {% endif %}
-    </div>
-  </div>
-
-  <!-- Heatmap scorecard -->
-  {% if td.scorecard %}
-  <div class="scorecard-wrap">
-    <div class="scorecard-title">Column &times; Check heatmap</div>
-    <table class="heatmap">
+  <!-- Issue scoreboard: rows = tables, columns = checks -->
+  <div class="section-title" style="margin-top:6px">Issue Scoreboard</div>
+  <div style="padding:0 0 12px 0">
+    <table class="scoreboard-tbl" id="scoreboard-heatmap">
       <thead>
         <tr>
-          <th>Column</th>
-          {% for cn in all_check_names %}
-          <th title="{{ cn }}">{{ cn | replace('_', ' ') | truncate(10, true, '') }}</th>
+          <th class="sb-num" data-sort="num">#</th>
+          <th class="sb-left" title="Table name" data-sort="str">Table</th>
+          <th class="sb-right" title="Total row count (full table scan)" data-sort="num">Rows</th>
+          <th class="sb-right" title="Rows included in the profiling sample" data-sort="num">Sampled</th>
+          <th class="sb-right" title="Percentage of rows sampled" data-sort="num">Sample%</th>
+          <th class="sb-right" title="Number of columns in the table" data-sort="num">Cols</th>
+          <th class="sb-center" title="Quality score 0–100 — weighted average of check severities" data-sort="num">Score</th>
+          {% for cn in canonical_order %}
+          <th class="sb-center" title="{{ check_labels[cn] }}" data-sort="str">{{ nav_labels[cn] }}</th>
           {% endfor %}
         </tr>
       </thead>
       <tbody>
-        {% for row in td.scorecard %}
+        {% for table in tables %}
+        {% set tc = tables_ctx[table] %}
+        {% set tsc = score_color(tc.quality_score) %}
         <tr>
-          <td class="col-name">{{ row.column }}</td>
-          {% for cn in all_check_names %}
-          <td class="cell {{ row[cn] | default('na') }}"
-              title="{{ cn }}: {{ row[cn] | default('n/a') }}"></td>
+          <td class="sb-num" data-val="{{ loop.index }}">{{ loop.index }}</td>
+          <td class="sb-name" data-val="{{ table }}">
+            <a href="#table-{{ table }}"
+               onclick="jumpTo('table-{{ table }}'); return false;">{{ table }}</a>
+          </td>
+          <td class="sb-right" data-val="{{ tc.row_count }}">{{ "{:,}".format(tc.row_count) }}</td>
+          <td class="sb-right" data-val="{{ tc.rows_sampled }}">{{ "{:,}".format(tc.rows_sampled) }}</td>
+          <td class="sb-right" data-val="{{ tc.row_count }}">{{ sample_rate_pct }}</td>
+          <td class="sb-right" data-val="{{ tc.col_count }}">{{ tc.col_count }}</td>
+          <td class="sb-score" data-val="{{ tc.quality_score }}"
+              style="color:{{ tsc }}" title="Quality score: {{ tc.quality_score }}/100">
+            {{ tc.quality_score }}
+          </td>
+          {% for cn in canonical_order %}
+          {% set sev = tc.check_worst[cn] %}
+          <td class="hm-cell {{ sev }}" title="{{ check_labels[cn] }}: {{ sev }}">
+            <a href="#{{ table }}-{{ cn }}"
+               onclick="jumpTo('{{ table }}-{{ cn }}'); return false;"
+               style="display:block;width:100%;height:100%"></a>
+          </td>
           {% endfor %}
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+</div>
+
+<!-- ═══ PER-TABLE SECTIONS ═══════════════════════════════════════ -->
+{% for table in tables %}
+{% set tc = tables_ctx[table] %}
+{% set sc = tc.severity_counts %}
+{% set has_issues = sc.critical > 0 or sc.warn > 0 %}
+
+<div id="table-{{ table }}" class="table-section {% if not has_issues %}all-ok{% endif %}">
+
+  <!-- Table header bar -->
+  <div class="table-header">
+    <a class="hdr-icon-btn" href="#summary" title="Home — top of report">&#8962;</a>
+    <h2>{{ table }}</h2>
+    {% if sc.critical > 0 %}<span class="sev-pill critical">{{ sc.critical }} critical</span>{% endif %}
+    {% if sc.warn > 0 %}<span class="sev-pill warn">{{ sc.warn }} warn</span>{% endif %}
+    {% if sc.critical == 0 and sc.warn == 0 %}<span class="sev-pill ok">all clear</span>{% endif %}
+    <button class="expand-all-btn" id="xall-{{ table }}"
+            onclick="toggleAllChecks('{{ table }}', this)"
+            title="Expand or collapse all checks for this table">+ Expand All</button>
+    <a class="back-link" href="#summary" style="margin-left:auto">&#8593; Summary</a>
+  </div>
+
+  <!-- Per-table summary card -->
+  <div class="summary-card">
+    <div class="summary-meta">
+      <span><strong>Rows:</strong> {{ "{:,}".format(tc.row_count) }}</span>
+      <span><strong>Sampled:</strong> {{ "{:,}".format(tc.rows_sampled) }} ({{ sample_rate_pct }})</span>
+      <span><strong>Columns:</strong> {{ tc.col_count }}</span>
+      <span><strong>Run:</strong> {{ run_at }}</span>
+      {% set tsc = score_color(tc.quality_score) %}
+      <span style="margin-left:auto">
+        <span style="font-size:10px;color:#6c7086;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Quality</span>
+        <span style="font-size:18px;font-weight:800;color:{{ tsc }};margin-left:6px">{{ tc.quality_score }}</span>
+        <span style="font-size:9px;color:#9399b2">/100</span>
+      </span>
+    </div>
+    <div class="summary-scorecard">
+      {% if sc.critical > 0 %}
+      <span class="scorecard-pill critical">{{ sc.critical }} critical</span>
+      {% endif %}
+      {% if sc.warn > 0 %}
+      <span class="scorecard-pill warn">{{ sc.warn }} warnings</span>
+      {% endif %}
+      <span class="scorecard-pill ok">{{ sc.ok }} ok</span>
+    </div>
+    <div class="summary-text">{{ tc.summary_text }}</div>
+    <div class="quick-links">
+      {% for cn, label, sev in tc.quick_links %}
+      <a class="quick-link {% if sev in ('critical','warn') %}{{ sev }}{% endif %}"
+         href="#{{ table }}-{{ cn }}"
+         onclick="jumpTo('{{ table }}-{{ cn }}'); return false;"
+         title="{{ label }}">
+        &#8594; {{ nav_labels[cn] }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Column × Check heatmap + data preview -->
+  {% if tc.scorecard %}
+  <div class="heatmap-preview-container">
+
+    <!-- Left: heatmap -->
+    <div class="heatmap-side">
+      <div class="heatmap-wrap">
+        <div class="heatmap-title">Column &times; Check heatmap</div>
+        <!-- Legend -->
+        <div class="heatmap-legend">
+          <span class="hl-swatch"><span class="hl-dot critical"></span>Critical</span>
+          <span class="hl-swatch"><span class="hl-dot warn"></span>Warn</span>
+          <span class="hl-swatch"><span class="hl-dot ok"></span>OK</span>
+          <span class="hl-swatch"><span class="hl-dot na"></span>N/A</span>
+        </div>
+        <table class="heatmap" id="heatmap-{{ table }}">
+          <thead>
+            <tr>
+              <th class="col-left" title="Schema ordinal position — column order as defined in the source schema" data-sort="num">#</th>
+              <th class="col-left" title="EDA Type Header — A=Strings, B=Dates/Datetimes, C=Numeric" data-sort="str">Grp</th>
+              <th class="col-left" title="EDA Subtype — classification within the type group" data-sort="str">Sub</th>
+              <th class="col-left" title="EDA sort key — 5-character field for preferred EDA ordering (Grp+Sub+Seq)" data-sort="str">EDA</th>
+              <th class="col-left" title="Column name as defined in the source schema" data-sort="str">Column</th>
+              <th class="col-left" title="Data type abbreviation from the source schema (STR=string, INT=integer, FLOAT=float, DEC=decimal, TS=timestamp, DATE=date, BOOL=boolean)" data-sort="str">Type</th>
+              <th class="col-left" title="Nullable — N = NOT NULL constraint (no nulls allowed, bold); Y = nullable (nulls allowed, muted)" data-sort="str">Null?</th>
+              <th class="col-left" title="Shape — numeric columns: box plot (whiskers=min/max, box=P25–P75, tick=P50 median); non-numeric columns: outlined box (cardinality not applicable)">Shape</th>
+              {% for cn in canonical_order %}
+              <th class="hm-check-hdr" title="{{ check_labels[cn] }}" data-sort="num">{{ nav_labels[cn] }}<span class="hdr-short">{{ check_short[cn] }}</span></th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% set sev_order = {'critical':3,'warn':2,'ok':1,'info':0.5,'na':0} %}
+            {% for row in tc.scorecard %}
+            <tr>
+              <td class="meta-num" data-val="{{ row.ordinal }}">{{ row.ordinal }}</td>
+              <td class="meta-type" data-val="{{ row.eda_grp }}" title="{{ row.eda_label }}">{{ row.eda_grp }}</td>
+              <td class="meta-type" data-val="{{ row.eda_grp }}{{ row.eda_sub }}" title="{{ row.eda_label }}">{{ row.eda_sub }}</td>
+              <td class="meta-type" data-val="{{ row.eda_sort }}" title="{{ row.eda_grp }}{{ row.eda_sub }}: {{ row.eda_label }}"><code style="font-size:9px">{{ row.eda_sort }}</code></td>
+              <td class="meta-name" data-val="{{ row.column }}"
+                  title="{{ row.data_type }} · null {{ row.null_pct }}% · {{ row.distinct_count }} distinct">
+                {{ row.column }}
+              </td>
+              <td class="meta-type" data-val="{{ row.type_short }}"><code>{{ row.type_short }}</code></td>
+              <td class="{{ 'meta-nullable-n' if not row.is_nullable else 'meta-nullable-y' }}"
+                  data-val="{{ 'N' if not row.is_nullable else 'Y' }}">
+                {{ 'N' if not row.is_nullable else 'Y' }}
+              </td>
+              <td class="meta-spark">{{ row.sparkline_svg }}</td>
+              {% for cn in canonical_order %}
+              {% set sev = row[cn] %}
+              <td class="hm-cell {{ sev }}" data-val="{{ sev_order.get(sev, 0) }}"
+                  title="{{ check_labels[cn] }}: {{ sev }}">
+                <a href="#{{ table }}-{{ cn }}"
+                   onclick="jumpTo('{{ table }}-{{ cn }}'); return false;"
+                   style="display:block;width:100%;height:20px"></a>
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Data preview (below heatmap) -->
+    {% if tc.sample_rows and tc.sample_rows.columns %}
+    {% set _preview_data = tc.sample_rows.rows %}
+    <div class="preview-side">
+      <div class="preview-title">Data Preview &nbsp;
+        <span style="font-weight:400;color:#aaa">— {{ _preview_data | length }} rows from sample</span>
+      </div>
+      <div class="preview-scroll">
+      <table class="preview-tbl" id="preview-{{ table }}">
+        <thead>
+          <tr>
+            <th class="row-num-hdr" title="Row number" data-sort="num">#</th>
+            {% for col in tc.sample_rows.columns %}
+            {% set _ts = tc.column_profiles.get(col, {}).get('type_short', '') %}
+            {% set _is_num = _ts in ['INT', 'FLOAT', 'DEC'] %}
+            <th class="{{ 'num-hdr' if _is_num else '' }}"
+                title="{{ col }}"
+                data-sort="{{ 'num' if _is_num else 'str' }}">{{ col | replace("_", " ") }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in _preview_data %}
+          <tr>
+            <td class="row-num" data-val="{{ loop.index }}">{{ loop.index }}</td>
+            {% for cell in row %}
+            {% set _col = tc.sample_rows.columns[loop.index0] %}
+            {% set _ts = tc.column_profiles.get(_col, {}).get('type_short', '') %}
+            {% set _is_num = _ts in ['INT', 'FLOAT', 'DEC'] %}
+            {% set _is_dt = _ts in ['TS', 'DATE', 'TIME'] %}
+            {% set _cell_cls = [('num-cell' if _is_num else ''), ('dt-cell' if _is_dt else '')] | select | join(' ') %}
+            {% if cell is none %}
+            <td class="null-val{{ ' ' + _cell_cls if _cell_cls else '' }}" data-val="">NULL</td>
+            {% else %}
+            <td class="{{ _cell_cls }}" title="{{ cell }}" data-val="{{ cell }}">{{ cell }}</td>
+            {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div><!-- /.preview-scroll -->
+    </div><!-- /.preview-side -->
+    {% else %}
+    <div class="preview-side preview-side-empty"></div>
+    {% endif %}
+
+  </div>
   {% endif %}
 
-  <!-- Per-check sections -->
-  {% for check_name, check_results in td.checks.items() %}
-  {% set worst_sev = namespace(v='ok') %}
-  {% for r in check_results %}
-    {% if r.severity == 'critical' %}{% set worst_sev.v = 'critical' %}
-    {% elif r.severity == 'warn' and worst_sev.v != 'critical' %}{% set worst_sev.v = 'warn' %}
-    {% endif %}
-  {% endfor %}
+  <!-- ── Check sections in canonical order ── -->
 
-  <div id="{{ table }}-{{ check_name }}"
-       class="check-section {% if worst_sev.v == 'ok' or worst_sev.v == 'info' %}all-ok{% endif %}">
-    <div class="check-header" onclick="toggleCheck(this)">
-      <span class="badge {{ worst_sev.v }}">{{ worst_sev.v }}</span>
-      <span class="check-name">{{ check_name | replace('_', ' ') | title }}</span>
+  {% for cn in canonical_order %}
+  {% set check_results = tc.checks[cn] %}
+  {% set worst_sev = tc.check_worst[cn] %}
+  {% if check_results %}
+
+  <div id="{{ table }}-{{ cn }}"
+       class="check-section {% if worst_sev in ('ok','info','na') %}all-ok{% endif %}">
+    <div class="check-header" onclick="toggleCheck(this, '{{ table }}-{{ cn }}')">
+      <a class="hdr-icon-btn" href="#summary" onclick="event.stopPropagation()" title="Home — top of report">&#8962;</a>
+      <a class="hdr-icon-btn" href="#table-{{ table }}" onclick="event.stopPropagation()" title="Up — {{ table }}">&#8593;</a>
       <span class="check-toggle">&#9654;</span>
+      <span class="check-title">{{ check_labels[cn] }}</span>
+      <span class="badge {{ worst_sev }}" style="margin-left:auto">{{ worst_sev }}</span>
     </div>
-    <div class="check-body">
+    <div class="check-body" id="body-{{ table }}-{{ cn }}">
 
-      {% if check_name == 'schema_audit' %}
-        {% for r in check_results %}
-        {% if r.detail.columns %}
-        <table class="data-table" style="margin-bottom:12px;">
-          <thead><tr><th>#</th><th>Column</th><th>Type</th><th>Nullable</th></tr></thead>
+      {# ── 1. Schema Audit ── #}
+      {% if cn == 'schema_audit' %}
+        {# Overview result (column_count metric) #}
+        {% set overview = check_results | selectattr('metric', 'equalto', 'column_count') | list %}
+        {# All-null column results #}
+        {% set all_null = check_results | selectattr('metric', 'equalto', 'all_null_column') | list %}
+
+        {% for r in overview %}
+        {% if r.detail.missing_from_contract %}
+        <div class="attr-note" style="color:#d20f39;font-weight:600;margin-bottom:8px">
+          &#9888; Missing from contract: {{ r.detail.missing_from_contract | join(', ') }}
+        </div>
+        {% endif %}
+
+        {% if all_null %}
+        <div class="attr-note" style="color:#b45309;font-weight:600;margin-bottom:8px">
+          &#9888; {{ all_null | length }} column(s) are entirely NULL — schema element exists but contains no data.
+        </div>
+        <table class="dt" style="margin-bottom:10px">
+          <thead><tr><th>#</th><th>Column</th><th>Type</th><th>Nullable</th><th>Finding</th></tr></thead>
           <tbody>
-          {% for col in r.detail.columns %}
+          {% for an in all_null %}
+          {% set col_meta = r.detail.columns | selectattr('name','equalto', an.column) | first %}
           <tr>
-            <td>{{ col.ordinal_position }}</td>
-            <td>{{ col.name }}</td>
-            <td><code>{{ col.data_type }}</code></td>
-            <td>{{ '✓' if col.is_nullable else '✗' }}</td>
+            <td>{{ col_meta.ordinal_position if col_meta else '' }}</td>
+            <td><strong>{{ an.column }}</strong></td>
+            <td><code>{{ an.detail.data_type }}</code></td>
+            <td>{{ '✓' if an.detail.is_nullable else '✗' }}</td>
+            <td><span class="badge warn">all null</span></td>
           </tr>
           {% endfor %}
           </tbody>
         </table>
-        {% if r.detail.missing_from_contract %}
-        <p style="color:#d20f39;font-weight:600;">
-          Missing from contract: {{ r.detail.missing_from_contract | join(', ') }}
+        {% endif %}
+
+        {% if r.detail.columns %}
+        <div style="font-size:10px;color:#89a0be;margin-bottom:4px">{{ r.detail.columns | length }} columns — {{ r.detail.columns | selectattr('is_nullable') | list | length }} nullable</div>
+        <table class="dt">
+          <thead><tr>
+            <th class="tnum">#</th>
+            <th>Column</th>
+            <th>Type</th>
+            <th title="NULL constraint — N = NOT NULL (no nulls allowed), Y = nullable">Null?</th>
+            <th>Status</th>
+          </tr></thead>
+          <tbody>
+          {% for col in r.detail.columns %}
+          {% set is_all_null = all_null | selectattr('column','equalto', col.name) | list | length > 0 %}
+          <tr {% if is_all_null %}style="background:rgba(249,226,175,0.08)"{% endif %}>
+            <td class="tnum">{{ col.ordinal_position }}</td>
+            <td class="meta-name">{% if is_all_null %}<strong>{{ col.name }}</strong>{% else %}{{ col.name }}{% endif %}</td>
+            <td class="meta-type"><code style="font-size:10px">{{ col.data_type }}</code></td>
+            <td class="{{ 'meta-nullable-n' if not col.is_nullable else 'meta-nullable-y' }}">{{ 'N' if not col.is_nullable else 'Y' }}</td>
+            <td>{% if is_all_null %}<span class="badge warn">all null</span>{% else %}<span class="badge ok">ok</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+        {% endfor %}
+
+      {# ── 2. Row Count ── #}
+      {% elif cn == 'row_count' %}
+        {% for r in check_results %}
+        {% if r.metric == 'row_count' %}
+        <div class="stat-row">
+          <div class="stat-item">
+            <div class="s-label">Total rows</div>
+            <div class="s-val" style="color:{% if r.severity == 'critical' %}#d20f39{% elif r.severity == 'warn' %}#b45309{% else %}inherit{% endif %}">
+              {{ "{:,}".format(r.value | int) }}
+            </div>
+            {% if r.detail.is_empty %}
+            <div style="font-size:10px;color:#d20f39;margin-top:2px;font-weight:600">&#9888; Table is empty</div>
+            {% endif %}
+          </div>
+        </div>
+        {% elif r.metric == 'daily_distribution' and r.detail.series %}
+        <p style="font-size:11px;color:#6c7086;margin-bottom:6px">
+          Date column: <strong>{{ r.detail.date_column }}</strong>
+          &nbsp;·&nbsp; {{ r.detail.gap_days | length }} gap day(s)
+          {% if r.detail.skew_days %}
+          &nbsp;·&nbsp; <span style="color:#d20f39">{{ r.detail.skew_days | length }} skew day(s)</span>
+          {% endif %}
         </p>
+        {% if include_charts %}
+        <div class="chart-wrap" style="height:180px">
+          <canvas id="c-{{ table }}-rc" data-chart-id="c-{{ table }}-rc"></canvas>
+        </div>
+        <script>
+        _chartCfg['c-{{ table }}-rc'] = (function(){
+          var s = {{ r.detail.series | tojson }};
+          return {type:'line',data:{labels:s.map(function(x){return x.date}),datasets:[{label:'Rows/day',data:s.map(function(x){return x.count}),borderColor:'#89dceb',backgroundColor:'rgba(137,220,235,.12)',borderWidth:1.5,pointRadius:0,fill:true,tension:.1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:10,font:{size:9}}},y:{ticks:{font:{size:9}}}}}};
+        })();
+        </script>
         {% endif %}
         {% endif %}
         {% endfor %}
 
-      {% elif check_name == 'row_count' %}
-        {% for r in check_results %}
-          {% if r.metric == 'row_count' %}
-          <div class="stat-cards">
-            <div class="stat-card">
-              <div class="s-label">Row count</div>
-              <div class="s-value">{{ "{:,}".format(r.value | int) }}</div>
+      {# ── 3. Null Density ── #}
+      {% elif cn == 'null_density' %}
+        {% set flagged = check_results | selectattr('severity','in',['critical','warn']) | list %}
+        {% set ok_cols  = check_results | selectattr('severity','equalto','ok') | list %}
+        {% macro null_row(r, bold, has_sample=false) %}
+          {% set prof = tc.column_profiles.get(r.column, {}) %}
+          {% set pct_val = r.value | float if r.value != 'error' else 0.0 %}
+          {% set bar_color = '#f38ba8' if r.severity == 'critical' else ('#f9e2af' if r.severity == 'warn' else '#a6e3a1') %}
+          <td class="col-ord" title="{% if has_sample %}Click row to view sample NULL records{% else %}Schema ordinal position{% endif %}">
+            {% if has_sample %}<span class="expand-icon" style="margin-right:2px">&#9654;</span>{% endif %}{{ prof.get('ordinal','') }}
+          </td>
+          <td class="col-name">{% if bold %}<strong>{{ r.column }}</strong>{% else %}{{ r.column }}{% endif %}</td>
+          <td class="col-type" title="Data type from source schema"><code style="font-size:10px">{{ prof.get('data_type','') }}</code></td>
+          <td class="{% if not prof.get('is_nullable', True) %}col-nullable-n{% else %}col-nullable-y{% endif %}"
+              title="NULL constraint — N = NOT NULL (no nulls allowed), Y = nullable">{{ 'N' if not prof.get('is_nullable', True) else 'Y' }}</td>
+          <td class="col-shape" title="Shape: box plot (numeric) or cardinality bar (other) — proportional to distinct values / row count">{{ prof.get('sparkline_svg','') }}</td>
+          <td class="tnum" title="Null count: number of rows where this column's value is SQL NULL">{{ "{:,}".format(r.detail.null_count | default(0) | int) }}</td>
+          <td class="tnum" title="Null %: bar chart of percentage of rows where this column's value is SQL NULL">
+            <div class="null-bar-track" style="width:60px"><div class="null-bar-fill" style="width:{{ [pct_val, 100] | min }}%;background:{{ bar_color }}"></div></div>
+          </td>
+          <td class="tnum" title="Null %: percentage of rows where this column's value is SQL NULL">{% if r.value != 'error' %}{{ "%.2f" | format(pct_val) }}%{% else %}<span style="color:#d20f39">error</span>{% endif %}</td>
+          <td class="tnum" title="Sentinel count: logically-null values that are not SQL NULL — empty string, 'N/A', 'NULL', 'NONE', 'none', and date sentinel 9999-12-31">{{ "{:,}".format(r.detail.sentinel_count | default(0) | int) }}</td>
+          <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+        {% endmacro %}
+        {% set nd_thead %}
+          <tr>
+            <th class="tnum" title="Schema ordinal position — column order as defined in the source schema">#</th>
+            <th title="Column name as defined in the source schema">Column Name</th>
+            <th title="Full data type from the source schema (e.g. INT64, FLOAT64, STRING, DATE, TIMESTAMP)">Type</th>
+            <th title="NULL constraint — N = NOT NULL (column cannot contain NULLs), Y = nullable (NULLs allowed)">Nullable</th>
+            <th title="Shape: box plot for numeric columns (whiskers = min/max, box = P25–P75, tick = P50); cardinality bar for other columns (fill = distinct values / total rows)">Shape</th>
+            <th class="tnum" title="Null Count: number of rows where this column's value is SQL NULL">Null Count</th>
+            <th class="tnum" title="Null %: bar chart — fill proportional to null percentage">Null %</th>
+            <th class="tnum" title="Null % value: exact null percentage, right-aligned">%</th>
+            <th class="tnum" title="Sentinel Count: logically-null values that are not SQL NULL — includes empty string (''), 'N/A', 'NULL', 'NONE', 'none' (strings), and date sentinel 9999-12-31 for date/timestamp columns">Sentinel Count</th>
+            <th title="Severity: critical = null % exceeds critical threshold; warn = exceeds warn threshold; ok = within normal range">Severity</th>
+          </tr>
+        {% endset %}
+        <!-- Violators subgroup -->
+        {% if flagged %}
+        <div class="subgroup-hdr sg-violators" onclick="toggleSubgroup(this, 'nd-viol-{{ table }}')">
+          <span class="subgroup-toggle" style="transform:rotate(90deg)">&#9654;</span>
+          <span>Violators &mdash; {{ flagged | length }} column(s) with null issues</span>
+          <span style="margin-left:auto;font-size:10px;font-weight:400">
+            {{ flagged | selectattr('severity','equalto','critical') | list | length }} critical &nbsp;·&nbsp;
+            {{ flagged | selectattr('severity','equalto','warn') | list | length }} warn
+          </span>
+        </div>
+        <div class="subgroup-body sg-open" id="nd-viol-{{ table }}">
+          <table class="dt" style="margin-top:0">
+            <thead>{{ nd_thead }}</thead>
+            <tbody>
+            {% for r in flagged | sort(attribute='severity') | reverse %}
+            {% set _nsr = r.detail.get('null_sample_rows') %}
+            {% set _has_sample = _nsr and _nsr.get('rows') %}
+            {% set _row_id = table ~ '-nl-' ~ (r.column | replace(' ','_') | replace('.','_')) %}
+            <tr {% if _has_sample %}onclick="toggleNullDetail('{{ _row_id }}')" style="cursor:pointer"{% endif %}>
+              {{ null_row(r, true, _has_sample) }}
+            </tr>
+            {% if _has_sample %}
+            <tr class="num-detail" id="nld-{{ _row_id }}" style="display:none">
+              <td colspan="10" style="padding:0;background:#f8f9fb;border-bottom:1px solid #e0e4ef">
+                <div style="padding:8px 14px">
+                  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6c7086;margin-bottom:6px">
+                    Sample rows where <code>{{ r.column }}</code> IS NULL &mdash; {{ _nsr.rows | length }} row(s)
+                  </div>
+                  <div style="overflow:auto;max-height:220px">
+                    <table class="preview-tbl" style="font-size:10px;min-width:100%">
+                      <thead>
+                        <tr>
+                          {% for cn in _nsr.columns %}
+                          <th title="{{ cn }}">{{ cn | replace('_',' ') }}</th>
+                          {% endfor %}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for sample_row in _nsr.rows %}
+                        <tr>
+                          {% for cell in sample_row %}
+                          {% if cell is none %}
+                          <td class="null-val">NULL</td>
+                          {% else %}
+                          <td title="{{ cell }}">{{ cell }}</td>
+                          {% endif %}
+                          {% endfor %}
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+        <!-- OK subgroup (collapsed by default — thead hidden until expanded) -->
+        {% if ok_cols %}
+        <div class="subgroup-hdr sg-ok" onclick="toggleSubgroup(this, 'nd-ok-{{ table }}')">
+          <span class="subgroup-toggle">&#9654;</span>
+          <span>OK &mdash; {{ ok_cols | length }} column(s) within thresholds</span>
+        </div>
+        <div class="subgroup-body" id="nd-ok-{{ table }}">
+          <table class="dt" style="margin-top:0">
+            <thead>{{ nd_thead }}</thead>
+            <tbody>
+            {% for r in ok_cols %}
+            <tr>{{ null_row(r, false) }}</tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+      {# ── 4. Uniqueness ── #}
+      {% elif cn == 'uniqueness' %}
+        {% set col_results = check_results | selectattr('column') | list %}
+        {% set id_cols = [] %}
+        {% set attr_cols = [] %}
+        {% for r in col_results %}
+          {% set prof = tc.column_profiles.get(r.column, {}) %}
+          {% if prof.get('is_identifier') %}
+            {% if id_cols.append(r) %}{% endif %}
+          {% else %}
+            {% if attr_cols.append(r) %}{% endif %}
+          {% endif %}
+        {% endfor %}
+        {% set table_level = check_results | rejectattr('column') | list %}
+        {% if table_level %}
+        <div class="stat-row" style="margin-bottom:8px">
+          {% for r in table_level %}
+          <div class="stat-item">
+            <div class="s-label">{{ r.metric | replace('_',' ') }}</div>
+            <div class="s-val" style="font-size:16px;color:{% if r.severity=='critical' %}#d20f39{% elif r.severity=='warn' %}#b45309{% else %}#40a02b{% endif %}">
+              {{ "{:,}".format(r.value | int) if r.value != 'error' else r.value }}
             </div>
           </div>
-          {% elif r.metric == 'daily_distribution' and r.detail.series %}
-            <p style="font-size:12px;color:#6c7086;margin-bottom:8px;">
-              Date column: <strong>{{ r.detail.date_column }}</strong>
-              &nbsp;|&nbsp; {{ r.detail.gap_days | length }} gap day(s)
-              {% if r.detail.skew_days %}&nbsp;|&nbsp; <span style="color:#d20f39">{{ r.detail.skew_days | length }} skew day(s)</span>{% endif %}
-            </p>
-            {% if include_charts %}
-            <div class="chart-wrap">
-              <canvas id="chart-{{ table }}-rowcount-{{ loop.index }}"></canvas>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% set uniq_thead %}
+          <tr>
+            <th class="tnum" title="Schema ordinal position — column order as defined in the source schema">#</th>
+            <th title="Column name as defined in the source schema">Column Name</th>
+            <th title="Full data type from the source schema (e.g. INT64, FLOAT64, STRING, DATE, TIMESTAMP)">Type</th>
+            <th title="NULL constraint — N = NOT NULL (column cannot contain NULLs), Y = nullable (NULLs allowed)">Nullable</th>
+            <th title="Shape: box plot for numeric columns; cardinality bar for other columns (fill = distinct values / total rows)">Shape</th>
+            <th class="tnum" title="Distinct Count: number of unique non-null values observed in this column">Distinct Count</th>
+            <th class="tnum" title="Distinct %: bar chart — fill proportional to distinct % of total rows (100% = every row unique)">Distinct %</th>
+            <th class="tnum" title="Distinct % value: exact distinct percentage, right-aligned">%</th>
+            <th class="tnum" title="Duplicate %: percentage of rows that are not unique — 100% minus Distinct %. High values are expected for attribute/descriptor columns.">Duplicate %</th>
+            <th title="Severity: critical/warn = duplicate % exceeds threshold. For Attribute columns this is expected and informational only.">Severity</th>
+          </tr>
+        {% endset %}
+        {% macro uniq_leading(r) %}
+          {% set prof = tc.column_profiles.get(r.column, {}) %}
+          <td class="col-ord">{{ prof.get('ordinal','') }}</td>
+          <td class="col-name"><strong>{{ r.column }}</strong></td>
+          <td class="col-type"><code style="font-size:10px">{{ prof.get('data_type','') }}</code></td>
+          <td class="{% if not prof.get('is_nullable', True) %}col-nullable-n{% else %}col-nullable-y{% endif %}">{{ 'N' if not prof.get('is_nullable', True) else 'Y' }}</td>
+          <td class="col-shape">{{ prof.get('sparkline_svg','') }}</td>
+        {% endmacro %}
+        {% if id_cols %}
+        <div class="uniq-section-label uniq-label-identifier">Identifier columns &mdash; distinct % &ge; 95%</div>
+        <table class="dt" style="margin-bottom:8px">
+          <thead>{{ uniq_thead }}</thead>
+          <tbody>
+          {% for r in id_cols %}
+          <tr>
+            {{ uniq_leading(r) }}
+            <td class="tnum">{{ "{:,}".format(r.detail.distinct_count | default(0) | int) }}</td>
+            <td class="tnum">
+              {% set dpct = r.detail.distinct_pct | default(0) | float %}
+              <div class="null-bar-track" style="width:60px"><div class="null-bar-fill" style="width:{{ [dpct, 100] | min }}%;background:#89dceb"></div></div>
+            </td>
+            <td class="tnum">{{ "%.2f" | format(r.detail.distinct_pct | default(0) | float) }}%</td>
+            <td class="tnum">{{ "%.2f" | format(r.value | float) if r.value != 'error' else '?' }}%</td>
+            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+        {% if attr_cols %}
+        <div class="uniq-section-label uniq-label-attribute">Attribute columns &mdash; distinct % &lt; 95%</div>
+        <div class="attr-note">High duplicate % is expected for attribute/descriptor columns — informational only.</div>
+        <table class="dt">
+          <thead>{{ uniq_thead }}</thead>
+          <tbody>
+          {% for r in attr_cols %}
+          <tr>
+            {{ uniq_leading(r) }}
+            <td class="tnum">{{ "{:,}".format(r.detail.distinct_count | default(0) | int) }}</td>
+            <td class="tnum">
+              {% set dpct = r.detail.distinct_pct | default(0) | float %}
+              <div class="null-bar-track" style="width:60px"><div class="null-bar-fill" style="width:{{ [dpct, 100] | min }}%;background:#89dceb"></div></div>
+            </td>
+            <td class="tnum">{{ "%.2f" | format(r.detail.distinct_pct | default(0) | float) }}%</td>
+            <td class="tnum">{{ "%.2f" | format(r.value | float) if r.value != 'error' else '?' }}%</td>
+            <td>
+              {% if r.severity == 'info' %}
+              <span class="badge info" title="Expected — high duplication is normal for categorical/attribute columns">expected</span>
+              {% elif r.severity in ('critical','warn') %}
+              <span class="badge {{ r.severity }}">{{ r.severity }}</span>
+              {% else %}
+              <span class="badge ok">ok</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+      {# ── 5. Numeric Distribution ── #}
+      {% elif cn == 'numeric_distribution' %}
+        {% set num_results = check_results | selectattr('column') | list | sort(attribute='severity', reverse=True) %}
+        {% if num_results %}
+        <!-- Consolidated comparison table -->
+        <table class="numeric-table">
+          <thead>
+            <tr>
+              <th title="Schema ordinal position — column order as defined in the source schema">#</th>
+              <th title="Column name as defined in the source schema">Column Name</th>
+              <th title="Full data type from the source schema">Type</th>
+              <th title="NULL constraint — N = NOT NULL (column cannot contain NULLs), Y = nullable (NULLs allowed)">Nullable</th>
+              <th title="Shape: box plot — whiskers = min/max, box = P25–P75 (IQR), tick = median (P50)">Shape</th>
+              <th title="Severity: critical/warn = outlier % exceeds threshold based on IQR fence method">Severity</th>
+              <th title="Minimum observed value (excluding NULLs)">Min</th>
+              <th title="25th percentile — 25% of values fall below this">P25</th>
+              <th title="50th percentile / median — half of values fall below this">P50</th>
+              <th title="75th percentile — 75% of values fall below this">P75</th>
+              <th title="95th percentile — 95% of values fall below this">P95</th>
+              <th title="Maximum observed value (excluding NULLs)">Max</th>
+              <th title="Outlier %: percentage of non-null values outside the IQR fence (P25 − 1.5×IQR to P75 + 1.5×IQR)">Outlier %</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for r in num_results %}
+          {% set d = r.detail %}
+          {% set prof = tc.column_profiles.get(r.column, {}) %}
+          {% set row_id = table ~ '-' ~ (r.column | replace(' ','_')) %}
+          <tr class="num-row" onclick="toggleNumericDetail('{{ row_id }}')">
+            <td><span class="expand-icon">&#9654;</span>{{ prof.get('ordinal', loop.index) }}</td>
+            <td><strong>{{ r.column }}</strong></td>
+            <td class="col-type"><code style="font-size:10px">{{ prof.get('data_type','') }}</code></td>
+            <td class="{% if not prof.get('is_nullable', True) %}col-nullable-n{% else %}col-nullable-y{% endif %}">{{ 'N' if not prof.get('is_nullable', True) else 'Y' }}</td>
+            <td class="col-shape">{{ prof.get('sparkline_svg','') }}</td>
+            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
+            <td class="tnum">{{ d.get('min', '—') }}</td>
+            <td class="tnum">{{ d.get('p25', '—') }}</td>
+            <td class="tnum">{{ d.get('p50', '—') }}</td>
+            <td class="tnum">{{ d.get('p75', '—') }}</td>
+            <td class="tnum">{{ d.get('p95', '—') }}</td>
+            <td class="tnum">{{ d.get('max', '—') }}</td>
+            <td class="tnum" style="color:{% if r.severity=='critical' %}#d20f39{% elif r.severity=='warn' %}#b45309{% else %}#40a02b{% endif %};font-weight:600">
+              {{ "%.2f" | format(r.value | float) if r.value != 'error' else '?' }}{% if r.value != 'error' %}%{% endif %}
+            </td>
+          </tr>
+          <tr class="num-detail" id="nd-{{ row_id }}" style="display:none">
+            <td colspan="13" style="padding:0;background:#f8f9fb;border-bottom:1px solid #e0e4ef">
+              <div style="display:flex;gap:0;align-items:stretch">
+                <!-- Left 50%: stats summary -->
+                <div style="flex:1;min-width:0;padding:6px 10px;border-right:1px solid #e0e4ef">
+                  <table style="font-size:10px;line-height:1.15;width:100%;border-collapse:collapse">
+                    <tr><td style="color:#6c7086;padding:0">Mean</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('mean','—') }}</td></tr>
+                    <tr><td style="color:#6c7086;padding:0">Std Dev</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('stddev','—') }}</td></tr>
+                    <tr><td style="color:#6c7086;padding:0">Min / Max</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('min','—') }} / {{ d.get('max','—') }}</td></tr>
+                    <tr><td style="color:#6c7086;padding:0">P25</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('p25','—') }}</td></tr>
+                    <tr><td style="color:#6c7086;padding:0">P50</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('p50','—') }}</td></tr>
+                    <tr><td style="color:#6c7086;padding:0">P75</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('p75','—') }}</td></tr>
+                    <tr><td style="color:#6c7086;padding:0">P95</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:0">{{ d.get('p95','—') }}</td></tr>
+                    <tr style="border-top:1px solid #e0e4ef"><td style="color:#6c7086;padding:1px 0 0">IQR Fence</td><td style="text-align:right;font-variant-numeric:tabular-nums;padding:1px 0 0">[{{ d.get('lower_fence','?') }}, {{ d.get('upper_fence','?') }}]</td></tr>
+                    <tr><td style="color:{% if d.get('outlier_count',0) > 0 %}#d20f39{% else %}#40a02b{% endif %};padding:0">Outliers</td><td style="text-align:right;font-weight:600;padding:0;color:{% if d.get('outlier_count',0) > 0 %}#d20f39{% else %}#40a02b{% endif %}">{{ "{:,}".format(d.get('outlier_count',0)|int) }} ({{ "%.2f"|format(d.get('outlier_pct',0)|float) }}%)</td></tr>
+                  </table>
+                </div>
+                <!-- Right 50%: histogram + box-whisker (via custom plugin) -->
+                <div style="flex:1;min-width:0;padding:10px 12px">
+                  {% if include_charts and d.get('histogram') %}
+                  {% set hist = d.histogram %}
+                  <div style="font-size:9px;color:#9ca3af;margin-bottom:2px;display:flex;justify-content:space-between">
+                    <span>Histogram (IQR fence &plusmn;1.5&times; — {{ hist.total_in_fence | default(0) }} rows)</span>
+                    <span style="color:#f9e2af">&#9472;&#9472; Cumulative %</span>
+                  </div>
+                  <div class="chart-wrap" style="height:240px">
+                    <canvas id="nc-{{ row_id }}" data-chart-id="nc-{{ row_id }}"></canvas>
+                  </div>
+                  <script>
+                  _chartCfg['nc-{{ row_id }}'] = (function(){
+                    var bins = {{ hist.bins | tojson }};
+                    var d = {{ d | tojson }};
+                    return {
+                      type: 'bar',
+                      data: {
+                        datasets: [
+                          {
+                            label: '% rows',
+                            data: bins.map(function(b){ return {x: b.center, y: b.pct}; }),
+                            backgroundColor: 'rgba(137,220,235,.6)',
+                            borderColor: '#89dceb',
+                            borderWidth: 0.5,
+                            barPercentage: 1.0,
+                            categoryPercentage: 1.0,
+                            yAxisID: 'y'
+                          },
+                          {
+                            label: 'Cumulative %',
+                            type: 'line',
+                            data: bins.map(function(b){ return {x: b.high, y: b.cumulative_pct}; }),
+                            borderColor: '#f9e2af',
+                            backgroundColor: 'transparent',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            stepped: 'after',
+                            yAxisID: 'y2'
+                          }
+                        ]
+                      },
+                      options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        layout: { padding: { bottom: 100 } },
+                        plugins: {
+                          legend: { display: false },
+                          boxWhisker: {
+                            lf: d.lower_fence, uf: d.upper_fence,
+                            p25: d.p25, p50: d.p50, p75: d.p75,
+                            histLow: {{ hist.hist_low }}, histHigh: {{ hist.hist_high }},
+                            binWidth: {{ hist.bin_width }}, numBins: {{ hist.num_bins }}
+                          }
+                        },
+                        scales: {
+                          x: {
+                            type: 'linear',
+                            min: {{ hist.hist_low }},
+                            max: {{ hist.hist_high }},
+                            ticks: { maxTicksLimit: 8, font: { size: 9 } }
+                          },
+                          y: {
+                            position: 'left',
+                            title: { display: true, text: '% rows', font: { size: 8 } },
+                            ticks: { font: { size: 9 } },
+                            min: 0
+                          },
+                          y2: {
+                            position: 'right',
+                            title: { display: false },
+                            ticks: {
+                              font: { size: 9 },
+                              callback: function(v){ return v + '%'; }
+                            },
+                            min: 0,
+                            max: 100,
+                            grid: { drawOnChartArea: false }
+                          }
+                        }
+                      },
+                      plugins: [_bwPlugin]
+                    };
+                  })();
+                  </script>
+                  {% else %}
+                  <div style="height:200px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:11px">
+                    {% if not include_charts %}Charts disabled{% else %}Histogram unavailable (constant or zero-range column){% endif %}
+                  </div>
+                  {% endif %}
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+      {# ── 6. Frequency Distribution ── #}
+      {% elif cn == 'frequency_distribution' %}
+        {# Count renderable items for trellis row calculation #}
+        {% set ns = namespace(count=0) %}
+        {% for r in check_results %}{% set d = r.detail %}{% if not d.get('skipped') and not d.get('error') %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+        {% set trellis_rows = ((ns.count + 2) // 3) if ns.count > 0 else 1 %}
+        <div class="freq-trellis" style="grid-template-rows:repeat({{ trellis_rows }},auto)">
+        {% for r in check_results %}
+        {% set d = r.detail %}
+        {% if not d.get('skipped') and not d.get('error') %}
+        {% set prof = tc.column_profiles.get(r.column, {}) %}
+        <div class="freq-trellis-item">
+          <div class="col-meta-strip" style="margin-top:4px">
+            <span class="cms-ord">{{ prof.get('ordinal','') }}</span>
+            <span class="cms-name">{{ r.column }}</span>
+            <span class="cms-type"><code>{{ prof.get('data_type','') }}</code></span>
+            <span class="{{ 'cms-nullable-n' if not prof.get('is_nullable', True) else 'cms-nullable-y' }}">{{ 'N' if not prof.get('is_nullable', True) else 'Y' }}</span>
+            <span class="cms-shape">{{ prof.get('sparkline_svg','') }}</span>
+            <span class="badge {{ r.severity }}" style="margin-left:4px">{{ r.severity }}</span>
+            <span style="color:#6c7086;font-size:10px;margin-left:4px">{{ d.get('distinct_count',0) }} distinct</span>
+          </div>
+          {% if prof.get('is_binary') or (d.get('series') or []) | length == 2 %}
+            <!-- Binary: pill display -->
+            <div class="freq-binary">
+              {% for item in d.get('series', []) %}
+              <span class="freq-pill {% if loop.first %}freq-pill-1{% else %}freq-pill-0{% endif %}">
+                {{ item.value }}: {{ item.pct | round(1) }}%
+              </span>
+              {% endfor %}
+            </div>
+          {% elif d.get('distinct_count', 0) > 20 %}
+            <!-- High-cardinality: top 10 with note -->
+            <p class="freq-note">Showing top {{ [d.get('series', []) | length, 10] | min }} of {{ d.get('distinct_count',0) }} distinct values.</p>
+            {% if include_charts and d.get('series') %}
+            {% set top10 = (d.get('series') or [])[:10] %}
+            <div class="chart-wrap" style="height:{{ [top10|length * 22 + 50, 260]|min }}px">
+              <canvas id="c-{{ table }}-fr-{{ r.column | replace(' ','_') }}"
+                      data-chart-id="c-{{ table }}-fr-{{ r.column | replace(' ','_') }}"></canvas>
             </div>
             <script>
-            (function(){
-              var series = {{ r.detail.series | tojson }};
-              var labels = series.map(function(s){ return s.date; });
-              var data   = series.map(function(s){ return s.count; });
-              new Chart(document.getElementById('chart-{{ table }}-rowcount-{{ loop.index }}'), {
-                type: 'line',
-                data: { labels: labels, datasets: [{
-                  label: 'Rows/day', data: data,
-                  borderColor: '#89dceb', backgroundColor: 'rgba(137,220,235,0.15)',
-                  borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.1
-                }]},
-                options: { responsive: true, maintainAspectRatio: false,
-                  plugins: { legend: { display: false } },
-                  scales: { x: { ticks: { maxTicksLimit: 12, font: { size: 10 } } },
-                            y: { ticks: { font: { size: 10 } } } }
-                }
-              });
+            _chartCfg['c-{{ table }}-fr-{{ r.column | replace(" ","_") }}'] = (function(){
+              var s = {{ top10 | tojson }};
+              var _mx = Math.min(100, Math.ceil(Math.max.apply(null, s.map(function(x){return x.pct;})) * 1.28));
+              return {type:'bar',data:{labels:s.map(function(x){return String(x.value).substring(0,25)}),datasets:[{label:'%',data:s.map(function(x){return x.pct}),backgroundColor:'rgba(166,227,161,.75)',borderColor:'#a6e3a1',borderWidth:1}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},barLabels:{decimals:1},tooltip:{callbacks:{label:function(ctx){var item=s[ctx.dataIndex];return ctx.parsed.x.toFixed(1)+'% ('+item.freq+' rows)';},}}},scales:{x:{max:_mx,title:{display:true,text:'% of rows',font:{size:9}},ticks:{font:{size:9},callback:function(v){return v+'%';}}},y:{ticks:{font:{size:9}}}}},plugins:[_barLabelPlugin]};
+            })();
+            </script>
+            {% endif %}
+          {% else %}
+            <!-- Low-cardinality: full bar chart -->
+            {% if include_charts and d.get('series') %}
+            <div class="chart-wrap" style="height:{{ [d.series|length * 22 + 50, 260]|min }}px">
+              <canvas id="c-{{ table }}-fr-{{ r.column | replace(' ','_') }}"
+                      data-chart-id="c-{{ table }}-fr-{{ r.column | replace(' ','_') }}"></canvas>
+            </div>
+            <script>
+            _chartCfg['c-{{ table }}-fr-{{ r.column | replace(" ","_") }}'] = (function(){
+              var s = {{ d.series | tojson }};
+              var _mx = Math.min(100, Math.ceil(Math.max.apply(null, s.map(function(x){return x.pct;})) * 1.28));
+              return {type:'bar',data:{labels:s.map(function(x){return String(x.value)}),datasets:[{label:'%',data:s.map(function(x){return x.pct}),backgroundColor:'rgba(166,227,161,.75)',borderColor:'#a6e3a1',borderWidth:1}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},barLabels:{decimals:1},tooltip:{callbacks:{label:function(ctx){var item=s[ctx.dataIndex];return ctx.parsed.x.toFixed(1)+'% ('+item.freq+' rows)';},}}},scales:{x:{max:_mx,title:{display:true,text:'% of rows',font:{size:9}},ticks:{font:{size:9},callback:function(v){return v+'%';}}},y:{ticks:{font:{size:9}}}}},plugins:[_barLabelPlugin]};
             })();
             </script>
             {% endif %}
           {% endif %}
+        </div>
+        {% endif %}
         {% endfor %}
+        </div>
 
-      {% elif check_name == 'null_density' %}
-        {% if include_tables %}
-        <table class="data-table" style="margin-bottom:8px;">
-          <thead><tr><th>Column</th><th>Null %</th><th>Null count</th><th>Sentinel count</th><th>Severity</th></tr></thead>
-          <tbody>
-          {% for r in check_results %}
-          <tr>
-            <td>{{ r.column }}</td>
-            <td>{{ r.value }}%</td>
-            <td>{{ "{:,}".format(r.detail.null_count | default(0) | int) }}</td>
-            <td>{{ "{:,}".format(r.detail.sentinel_count | default(0) | int) }}</td>
-            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
-          </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
-
-      {% elif check_name == 'uniqueness' %}
-        {% if include_tables %}
-        <table class="data-table" style="margin-bottom:8px;">
-          <thead><tr><th>Column</th><th>Distinct %</th><th>Duplicate %</th><th>Severity</th></tr></thead>
-          <tbody>
-          {% for r in check_results if r.column %}
-          <tr>
-            <td>{{ r.column }}</td>
-            <td>{{ r.detail.distinct_pct | default('—') }}%</td>
-            <td>{{ r.value }}%</td>
-            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
-          </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
-
-      {% elif check_name == 'numeric_distribution' %}
+      {# ── 7. Temporal Consistency ── #}
+      {% elif cn == 'temporal_consistency' %}
+        <!-- Section summary sentence -->
+        {% set temporal_parts = [] %}
         {% for r in check_results %}
-        <p style="font-weight:600;margin:10px 0 4px;">{{ r.column }}
-          <span class="badge {{ r.severity }}" style="margin-left:8px;">{{ r.severity }}</span>
-        </p>
-        <div class="stat-cards">
-          {% for key in ['min','p25','p50','p75','p95','p99','max'] %}
-          {% if key in r.detail %}
-          <div class="stat-card">
-            <div class="s-label">{{ key }}</div>
-            <div class="s-value" style="font-size:14px;">{{ r.detail[key] }}</div>
-          </div>
+          {% if r.detail.gap_days is defined and r.detail.gap_days is not none %}
+            {% set gap_n = (r.detail.gap_days or []) | length %}
+            {% set anom_n = (r.detail.anomaly_days or []) | length %}
+            {% if gap_n == 0 and anom_n == 0 %}
+              {% if temporal_parts.append(r.column ~ ' has complete coverage ' ~ r.detail.min_date ~ ' → ' ~ r.detail.max_date ~ ' with no gaps or anomalies') %}{% endif %}
+            {% elif gap_n > 0 %}
+              {% if temporal_parts.append(r.column ~ ' has ' ~ gap_n ~ ' gap day(s) — investigate missing loads') %}{% endif %}
+            {% elif anom_n > 0 %}
+              {% if temporal_parts.append(r.column ~ ' has ' ~ anom_n ~ ' volume anomaly day(s) worth reviewing') %}{% endif %}
+            {% endif %}
           {% endif %}
-          {% endfor %}
-          <div class="stat-card">
-            <div class="s-label">Outlier %</div>
-            <div class="s-value" style="font-size:14px;color:{% if r.severity=='critical' %}#d20f39{% elif r.severity=='warn' %}#b45309{% else %}#40a02b{% endif %};">
-              {{ r.value }}%
+        {% endfor %}
+        {% if temporal_parts %}
+        <div class="temporal-summary">{{ temporal_parts | join('. ') }}.</div>
+        {% endif %}
+        {% for r in check_results %}
+        {% set prof = tc.column_profiles.get(r.column, {}) %}
+        <div class="col-meta-strip" style="margin-top:8px">
+          <span class="cms-ord">{{ prof.get('ordinal','') }}</span>
+          <span class="cms-name">{{ r.column }}</span>
+          <span class="cms-type"><code>{{ prof.get('data_type','') }}</code></span>
+          <span class="{{ 'cms-nullable-n' if not prof.get('is_nullable', True) else 'cms-nullable-y' }}">{{ 'N' if not prof.get('is_nullable', True) else 'Y' }}</span>
+          <span class="cms-shape">{{ prof.get('sparkline_svg','') }}</span>
+          <span class="badge {{ r.severity }}" style="margin-left:4px">{{ r.severity }}</span>
+        </div>
+        <div class="temporal-kpi-chart">
+          <!-- KPI stack (left) -->
+          <div class="temporal-kpi-stack">
+            <div class="stat-item">
+              <div class="s-label">From</div>
+              <div class="s-val" style="font-size:11px">{{ r.detail.get('min_date','—') }}</div>
+            </div>
+            <div class="stat-item">
+              <div class="s-label">To</div>
+              <div class="s-val" style="font-size:11px">{{ r.detail.get('max_date','—') }}</div>
+            </div>
+            <div class="stat-item">
+              <div class="s-label">Gap days</div>
+              <div class="s-val" style="color:{% if r.detail.get('gap_days') %}#d20f39{% else %}#40a02b{% endif %}">
+                {{ r.detail.get('gap_days', []) | length }}
+              </div>
+            </div>
+            <div class="stat-item">
+              <div class="s-label">Anomaly days</div>
+              <div class="s-val" style="color:{% if r.detail.get('anomaly_days') %}#b45309{% else %}#40a02b{% endif %}">
+                {{ r.detail.get('anomaly_days', []) | length }}
+              </div>
             </div>
           </div>
+          <!-- Area chart (right) -->
+          <div class="temporal-chart-area">
+            {% if include_charts and r.detail.get('series') %}
+            <div class="chart-wrap" style="height:160px">
+              <canvas id="c-{{ table }}-tm-{{ r.column | replace(' ','_') }}"
+                      data-chart-id="c-{{ table }}-tm-{{ r.column | replace(' ','_') }}"></canvas>
+            </div>
+            <script>
+            _chartCfg['c-{{ table }}-tm-{{ r.column | replace(" ","_") }}'] = (function(){
+              var s = {{ r.detail.series | tojson }};
+              return {type:'line',data:{labels:s.map(function(x){return x.date}),datasets:[{label:'Rows/day',data:s.map(function(x){return x.count}),borderColor:'#cba6f7',backgroundColor:'rgba(203,166,247,.1)',borderWidth:1.5,pointRadius:0,fill:true,tension:.2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:10,font:{size:9}}},y:{ticks:{font:{size:9}}}}}};
+            })();
+            </script>
+            {% else %}
+            <div style="height:160px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:11px">No series data</div>
+            {% endif %}
+          </div>
         </div>
-        {% if include_charts and r.detail.get('p25') is not none %}
-        <div class="chart-wrap" style="height:140px;">
-          <canvas id="chart-{{ table }}-num-{{ r.column | replace(' ','_') }}"></canvas>
-        </div>
-        <script>
-        (function(){
-          var labels = ['min','p25','p50','p75','p95','p99','max'];
-          var vals   = [
-            {{ r.detail.get('min', 0) }},
-            {{ r.detail.get('p25', 0) }},
-            {{ r.detail.get('p50', 0) }},
-            {{ r.detail.get('p75', 0) }},
-            {{ r.detail.get('p95', 0) }},
-            {{ r.detail.get('p99', 0) }},
-            {{ r.detail.get('max', 0) }}
-          ];
-          new Chart(document.getElementById('chart-{{ table }}-num-{{ r.column | replace(" ","_") }}'), {
-            type: 'bar',
-            data: { labels: labels, datasets: [{
-              label: '{{ r.column }}',
-              data: vals,
-              backgroundColor: 'rgba(137,220,235,0.7)',
-              borderColor: '#89dceb', borderWidth: 1
-            }]},
-            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } }
-            }
-          });
-        })();
-        </script>
-        {% endif %}
         {% endfor %}
 
-      {% elif check_name == 'frequency_distribution' %}
-        {% for r in check_results if not r.detail.get('skipped') %}
-        {% if r.detail.series %}
-        <p style="font-weight:600;margin:10px 0 4px;">
-          {{ r.column }}
-          <span class="badge {{ r.severity }}" style="margin-left:8px;">{{ r.severity }}</span>
-          <span style="color:#6c7086;font-size:11px;margin-left:8px;">
-            {{ r.detail.distinct_count }} distinct values
-          </span>
-        </p>
-        {% if include_charts %}
-        <div class="chart-wrap" style="height:{{ [r.detail.series|length * 20 + 40, 260]|min }}px;">
-          <canvas id="chart-{{ table }}-freq-{{ r.column | replace(' ','_') }}"></canvas>
-        </div>
-        <script>
-        (function(){
-          var series = {{ r.detail.series | tojson }};
-          var labels = series.map(function(s){ return String(s.value).substring(0,30); });
-          var data   = series.map(function(s){ return s.pct; });
-          new Chart(document.getElementById('chart-{{ table }}-freq-{{ r.column | replace(" ","_") }}'), {
-            type: 'bar',
-            data: { labels: labels, datasets: [{
-              label: '% of rows', data: data,
-              backgroundColor: 'rgba(166,227,161,0.75)',
-              borderColor: '#a6e3a1', borderWidth: 1
-            }]},
-            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: { x: { title: { display: true, text: '% of rows', font: { size: 10 } },
-                              ticks: { font: { size: 10 } } },
-                        y: { ticks: { font: { size: 10 } } } }
-            }
-          });
-        })();
-        </script>
-        {% endif %}
-        {% endif %}
-        {% endfor %}
-
-      {% elif check_name == 'temporal_consistency' %}
-        {% for r in check_results %}
-        <p style="font-weight:600;margin:10px 0 4px;">
-          {{ r.column }}
-          <span class="badge {{ r.severity }}" style="margin-left:8px;">{{ r.severity }}</span>
-        </p>
-        <div class="stat-cards" style="margin-bottom:8px;">
-          <div class="stat-card"><div class="s-label">From</div>
-            <div class="s-value" style="font-size:13px;">{{ r.detail.min_date }}</div></div>
-          <div class="stat-card"><div class="s-label">To</div>
-            <div class="s-value" style="font-size:13px;">{{ r.detail.max_date }}</div></div>
-          <div class="stat-card"><div class="s-label">Gap days</div>
-            <div class="s-value" style="font-size:18px;color:{% if r.detail.gap_days %}#d20f39{% else %}#40a02b{% endif %};">
-              {{ r.detail.gap_days | length }}</div></div>
-          <div class="stat-card"><div class="s-label">Anomaly days</div>
-            <div class="s-value" style="font-size:18px;color:{% if r.detail.anomaly_days %}#b45309{% else %}#40a02b{% endif %};">
-              {{ r.detail.anomaly_days | length }}</div></div>
-        </div>
-        {% if include_charts and r.detail.series %}
-        <div class="chart-wrap">
-          <canvas id="chart-{{ table }}-temp-{{ r.column | replace(' ','_') }}"></canvas>
-        </div>
-        <script>
-        (function(){
-          var series = {{ r.detail.series | tojson }};
-          var labels = series.map(function(s){ return s.date; });
-          var data   = series.map(function(s){ return s.count; });
-          new Chart(document.getElementById('chart-{{ table }}-temp-{{ r.column | replace(" ","_") }}'), {
-            type: 'line',
-            data: { labels: labels, datasets: [{
-              label: 'Rows/day', data: data,
-              borderColor: '#cba6f7', backgroundColor: 'rgba(203,166,247,0.12)',
-              borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.2
-            }]},
-            options: { responsive: true, maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: { x: { ticks: { maxTicksLimit: 12, font: { size: 10 } } },
-                        y: { ticks: { font: { size: 10 } } } }
-            }
-          });
-        })();
-        </script>
-        {% endif %}
-        {% endfor %}
-
-      {% elif check_name == 'format_validation' %}
+      {# ── 8. Format Validation ── #}
+      {% elif cn == 'format_validation' %}
         {% if include_tables %}
-        <table class="data-table" style="margin-bottom:8px;">
-          <thead><tr><th>Column</th><th>Format</th><th>Violations</th><th>Violation %</th><th>Severity</th></tr></thead>
+        <table class="dt">
+          <thead><tr>
+            <th class="tnum" title="Schema ordinal position — column order as defined in the source schema">#</th>
+            <th title="Column name as defined in the source schema">Column Name</th>
+            <th title="Full data type from the source schema">Type</th>
+            <th title="NULL constraint — N = NOT NULL (column cannot contain NULLs), Y = nullable (NULLs allowed)">Nullable</th>
+            <th title="Shape: box plot for numeric columns; outlined box for non-numeric columns">Shape</th>
+            <th title="The format pattern or rule that was checked (e.g. email address, phone number, UUID, ISO 2-letter country code, ISO 3-letter currency code)">Format / Check</th>
+            <th class="tnum" title="Violations: count of non-null rows that failed to match the expected format pattern">Violations</th>
+            <th class="tnum" title="Violation %: percentage of non-null rows that failed the format check — higher values indicate the column may not follow the expected format">Violation %</th>
+            <th title="Severity: critical/warn = violation % exceeds threshold; ok = within normal range">Severity</th>
+          </tr></thead>
           <tbody>
           {% for r in check_results %}
+          {% set prof = tc.column_profiles.get(r.column, {}) %}
           <tr>
-            <td>{{ r.column }}</td>
-            <td>{{ r.detail.format_label | default(r.detail.get('note','enum check') | truncate(30)) }}</td>
-            <td>{{ "{:,}".format(r.detail.violations | default(r.value) | int) if r.detail.violations is defined else r.value }}</td>
-            <td>{{ r.value }}{% if r.value != 'error' %}%{% endif %}</td>
+            <td class="col-ord">{{ prof.get('ordinal','') }}</td>
+            <td class="col-name"><strong>{{ r.column }}</strong></td>
+            <td class="col-type"><code style="font-size:10px">{{ prof.get('data_type','') }}</code></td>
+            <td class="{% if not prof.get('is_nullable', True) %}col-nullable-n{% else %}col-nullable-y{% endif %}">{{ 'N' if not prof.get('is_nullable', True) else 'Y' }}</td>
+            <td class="col-shape">{{ prof.get('sparkline_svg','') }}</td>
+            <td>{{ r.detail.get('format_label', r.detail.get('note','enum check')) }}</td>
+            <td class="tnum">{{ "{:,}".format(r.detail.get('violations', 0) | int) if r.detail.get('violations') is not none else r.value }}</td>
+            <td class="tnum">{{ "%.2f" | format(r.value | float) if r.value != 'error' else '?' }}{% if r.value != 'error' %}%{% endif %}</td>
             <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
           </tr>
           {% endfor %}
@@ -601,41 +1620,143 @@
         </table>
         {% endif %}
 
-      {% else %}
-        <!-- Generic fallback for any check not explicitly templated -->
-        {% if include_tables %}
-        <table class="data-table" style="margin-bottom:8px;">
-          <thead><tr><th>Column</th><th>Metric</th><th>Value</th><th>Severity</th></tr></thead>
-          <tbody>
-          {% for r in check_results %}
-          <tr>
-            <td>{{ r.column | default('—') }}</td>
-            <td>{{ r.metric }}</td>
-            <td>{{ r.value }}</td>
-            <td><span class="badge {{ r.severity }}">{{ r.severity }}</span></td>
-          </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
       {% endif %}
-
     </div><!-- /.check-body -->
   </div><!-- /.check-section -->
+  {% endif %}
   {% endfor %}
+
 </div><!-- /.table-section -->
 {% endfor %}
 
-<!-- spacer -->
-<div style="height:60px;"></div>
+<div style="height:60px"></div>
 </div><!-- /#main -->
 
 <script>
-function toggleCheck(header) {
-  var body = header.nextElementSibling;
+/* ── Table sort ── */
+var _sortState = {};  // tableId → {col, dir}
+
+function sortTable(th) {
+  var table = th.closest('table');
+  if (!table || !table.id) return;
+  var id = table.id;
+  var ths = Array.from(th.closest('tr').querySelectorAll('th'));
+  var colIdx = ths.indexOf(th);
+  var sortType = th.getAttribute('data-sort') || 'str';
+  if (!sortType) return;  // unsortable column (Shape)
+
+  var prev = _sortState[id] || {col: -1, dir: 0};
+  var dir = (prev.col === colIdx && prev.dir === 1) ? -1 : 1;
+  _sortState[id] = {col: colIdx, dir: dir};
+
+  // Update header carets
+  ths.forEach(function(h) { h.classList.remove('sort-asc','sort-desc'); });
+  th.classList.add(dir === 1 ? 'sort-asc' : 'sort-desc');
+
+  var tbody = table.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  var sevOrder = {critical:3, warn:2, ok:1, info:1, na:0};
+
+  rows.sort(function(a, b) {
+    var aCell = a.querySelectorAll('td')[colIdx];
+    var bCell = b.querySelectorAll('td')[colIdx];
+    if (!aCell || !bCell) return 0;
+    var aVal = (aCell.getAttribute('data-val') || aCell.textContent || '').trim();
+    var bVal = (bCell.getAttribute('data-val') || bCell.textContent || '').trim();
+    var cmp;
+    if (sortType === 'num') {
+      cmp = (parseFloat(aVal) || 0) - (parseFloat(bVal) || 0);
+    } else if (sortType === 'sev') {
+      cmp = (sevOrder[aVal] || 0) - (sevOrder[bVal] || 0);
+    } else {
+      cmp = aVal.localeCompare(bVal);
+    }
+    return cmp * dir;
+  });
+  rows.forEach(function(r) { tbody.appendChild(r); });
+}
+
+function initSortableTables() {
+  document.querySelectorAll('table[id]').forEach(function(table) {
+    var ths = table.querySelectorAll('thead th[data-sort]');
+    ths.forEach(function(th) {
+      th.addEventListener('click', function() { sortTable(th); });
+    });
+  });
+}
+
+function initSectionCharts(bodyEl) {
+  var canvases = bodyEl.querySelectorAll('canvas[data-chart-id]');
+  canvases.forEach(function(c) {
+    var id = c.getAttribute('data-chart-id');
+    if (_chartCfg[id] && !_chartInst[id]) {
+      _chartInst[id] = new Chart(c, _chartCfg[id]);
+    }
+  });
+}
+
+function toggleCheck(header, sectionId) {
+  var body = document.getElementById('body-' + sectionId);
   var arrow = header.querySelector('.check-toggle');
+  if (!body) return;
+  var opening = !body.classList.contains('open');
   body.classList.toggle('open');
-  arrow.classList.toggle('open');
+  if (arrow) arrow.classList.toggle('open');
+  if (opening) initSectionCharts(body);
+}
+
+function toggleGroup(header) {
+  var body = header.nextElementSibling;
+  body.classList.toggle('open');
+  var arrow = header.querySelector('span:last-child');
+  if (arrow) arrow.style.transform = body.classList.contains('open') ? 'rotate(90deg)' : '';
+}
+
+function toggleNumericDetail(rowId) {
+  var row = document.getElementById('nd-' + rowId);
+  if (!row) return;
+  var opening = row.style.display === 'none' || row.style.display === '';
+  row.style.display = opening ? 'table-row' : 'none';
+  // Update expand icon on the trigger row
+  var triggerRow = row.previousElementSibling;
+  var icon = triggerRow ? triggerRow.querySelector('.expand-icon') : null;
+  if (icon) icon.textContent = opening ? '▼ ' : '▶ ';
+  if (opening) {
+    var canvas = row.querySelector('canvas[data-chart-id]');
+    if (canvas) {
+      var id = canvas.getAttribute('data-chart-id');
+      if (_chartCfg[id] && !_chartInst[id]) {
+        _chartInst[id] = new Chart(canvas, _chartCfg[id]);
+      }
+    }
+  }
+}
+
+function toggleNullDetail(rowId) {
+  var row = document.getElementById('nld-' + rowId);
+  if (!row) return;
+  var opening = row.style.display === 'none' || row.style.display === '';
+  row.style.display = opening ? 'table-row' : 'none';
+  var triggerRow = row.previousElementSibling;
+  var icon = triggerRow ? triggerRow.querySelector('.expand-icon') : null;
+  if (icon) icon.textContent = opening ? '\u25bc ' : '\u25ba ';
+}
+
+function toggleSubgroup(hdr, bodyId) {
+  var body = document.getElementById(bodyId);
+  if (!body) return;
+  var open = body.classList.toggle('sg-open');
+  var arrow = hdr.querySelector('.subgroup-toggle');
+  if (arrow) arrow.style.transform = open ? 'rotate(90deg)' : '';
+}
+
+function toggleOkRows(btn, tbodyId) {
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  var open = tbody.classList.toggle('open');
+  btn.textContent = open
+    ? btn.textContent.replace('Show', 'Hide')
+    : btn.textContent.replace('Hide', 'Show');
 }
 
 function toggleIssuesOnly(btn) {
@@ -644,27 +1765,58 @@ function toggleIssuesOnly(btn) {
   btn.textContent = btn.classList.contains('active') ? 'Show all' : 'Issues only';
 }
 
-function jumpTo(anchor) {
-  var el = document.getElementById(anchor.replace('#',''));
+function jumpTo(id) {
+  var el = document.getElementById(id);
   if (!el) return;
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  // Auto-expand the check body if it's collapsed
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+  var header = el.querySelector('.check-header');
   var body = el.querySelector('.check-body');
-  if (body && !body.classList.contains('open')) {
-    var header = el.querySelector('.check-header');
-    if (header) toggleCheck(header);
+  if (body && !body.classList.contains('open') && header) {
+    var sectionId = id;
+    toggleCheck(header, sectionId);
   }
 }
 
-// Auto-expand sections with critical issues on load
-document.querySelectorAll('.check-section').forEach(function(section) {
-  var badge = section.querySelector('.check-header .badge');
-  if (badge && (badge.classList.contains('critical') || badge.classList.contains('warn'))) {
-    var body = section.querySelector('.check-body');
-    var arrow = section.querySelector('.check-toggle');
-    if (body) body.classList.add('open');
-    if (arrow) arrow.classList.add('open');
-  }
+function toggleAllChecks(tableId, btn) {
+  var section = document.getElementById('table-' + tableId);
+  if (!section) return;
+  var bodies = section.querySelectorAll('.check-body');
+  var anyOpen = Array.from(bodies).some(function(b) { return b.classList.contains('open'); });
+  bodies.forEach(function(b) {
+    var header = b.previousElementSibling;
+    if (anyOpen) {
+      b.classList.remove('open');
+      var arrow = header ? header.querySelector('.expand-icon') : null;
+      if (arrow) arrow.textContent = '▶';
+    } else {
+      b.classList.add('open');
+      var arrow = header ? header.querySelector('.expand-icon') : null;
+      if (arrow) arrow.textContent = '▼';
+    }
+  });
+  if (btn) btn.textContent = anyOpen ? '+ Expand All' : '– Collapse All';
+}
+
+// Auto-expand critical/warn sections
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.check-section').forEach(function(section) {
+    var badge = section.querySelector('.check-header .badge');
+    if (badge && (badge.classList.contains('critical') || badge.classList.contains('warn'))) {
+      var header = section.querySelector('.check-header');
+      var id = section.id;
+      if (header && id) toggleCheck(header, id);
+    }
+  });
+  // Sync expand-all button state for each table after auto-expand
+  document.querySelectorAll('.table-section').forEach(function(ts) {
+    var tableId = ts.id.replace('table-', '');
+    var btn = document.getElementById('xall-' + tableId);
+    if (!btn) return;
+    var anyOpen = ts.querySelector('.check-body.open');
+    if (anyOpen) btn.textContent = '– Collapse All';
+  });
+  // Init sortable tables (heatmaps + data preview)
+  initSortableTables();
 });
 </script>
 </body>
