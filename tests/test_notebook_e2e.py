@@ -109,10 +109,20 @@ def test_notebook_command_produces_valid_ipynb(tmp_path, dev_config):
         assert any("TABLE_REF" in s and "sample_df" in s for s in code_sources)
         assert any("profile(sample_df, charts=False)" in s for s in code_sources)
 
+        # s00 Header — H1 title cell + at least one DQ callout
+        assert any(s.startswith("# ") and "EDA / Data Quality Review" in s
+                   for s in md_sources)
+        assert any(s.startswith("> [!") for s in md_sources)
+
         # s03 Schema & Grain
         assert any(s.startswith("## Schema & Grain") for s in md_sources)
         assert any("schema(sample_df)" in s for s in code_sources)
         assert any("describe_by_type(sample_df)" in s for s in code_sources)
+
+        # s04 Univariate Analysis (the dev DuckDB tables have continuous
+        # columns, so plot_distribution is guaranteed to appear)
+        assert any(s.startswith("## Univariate Analysis") for s in md_sources)
+        assert any("plot_distribution(" in s for s in code_sources)
 
     # Helpers were seeded
     for h in ("eda_helpers.py", "eda_profile.py", "eda_helpers_call_templates.py"):
