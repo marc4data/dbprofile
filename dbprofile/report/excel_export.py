@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import (
-    Alignment, Border, Font, PatternFill, Side
-)
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from dbprofile.report.renderer import (
-    CANONICAL_ORDER, CHECK_LABELS, CHECK_SHORT, _score_color,
+    CANONICAL_ORDER,
+    CHECK_LABELS,
+    CHECK_SHORT,
 )
 
 # ── Palette ────────────────────────────────────────────────────────────────
@@ -47,9 +46,12 @@ _SCORE_COLOR: dict[str, str] = {
 }
 
 def _score_fill(score: int) -> str:
-    if score >= 90: return _SCORE_COLOR["green"]
-    if score >= 75: return _SCORE_COLOR["yellow"]
-    if score >= 60: return _SCORE_COLOR["orange"]
+    if score >= 90:
+        return _SCORE_COLOR["green"]
+    if score >= 75:
+        return _SCORE_COLOR["yellow"]
+    if score >= 60:
+        return _SCORE_COLOR["orange"]
     return _SCORE_COLOR["red"]
 
 
@@ -191,9 +193,13 @@ def _write_table_sheet(wb: Workbook, table: str, tc: dict[str, Any],
     # Columns: A=#, B=Field, C=Type, D=Grp, E=Sub, F=Seq, G=EDA, then checks
     eda_col_start = 4    # D
     check_col_start = 8  # H (after 4 EDA columns)
-    ws.cell(row=3, column=1, value="Check Results").font = _font(bold=True, color=_SUBHDR_FG, size=9)
+    ws.cell(row=3, column=1, value="Check Results").font = _font(
+        bold=True, color=_SUBHDR_FG, size=9
+    )
     ws.cell(row=3, column=1).fill = _fill(_SUBHDR_BG)
-    ws.cell(row=3, column=2, value="(worst per check across all columns)").font = _font(color=_SUBHDR_FG, size=9)
+    ws.cell(
+        row=3, column=2, value="(worst per check across all columns)"
+    ).font = _font(color=_SUBHDR_FG, size=9)
     ws.cell(row=3, column=2).fill = _fill(_SUBHDR_BG)
     for col_i in range(3, check_col_start):
         ws.cell(row=3, column=col_i, value="").fill = _fill(_SUBHDR_BG)
