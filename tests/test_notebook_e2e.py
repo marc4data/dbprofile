@@ -96,11 +96,23 @@ def test_notebook_command_produces_valid_ipynb(tmp_path, dev_config):
         assert "source_hash" in nb["metadata"]["dbprofile"]
 
         code_sources = [c.source for c in nb.cells if c.cell_type == "code"]
-        # Helper imports + DuckDB-specific connector wiring
+        md_sources = [c.source for c in nb.cells if c.cell_type == "markdown"]
+
+        # s01 Setup
         assert any("from eda_helpers import" in s for s in code_sources)
         assert any("duckdb.connect(DATABASE_PATH, read_only=True)" in s
                    for s in code_sources)
         assert any("FORCE_RELOAD = False" in s for s in code_sources)
+
+        # s02 Data Gathering
+        assert any(s.startswith("## Data Gathering") for s in md_sources)
+        assert any("TABLE_REF" in s and "sample_df" in s for s in code_sources)
+        assert any("profile(sample_df, charts=False)" in s for s in code_sources)
+
+        # s03 Schema & Grain
+        assert any(s.startswith("## Schema & Grain") for s in md_sources)
+        assert any("schema(sample_df)" in s for s in code_sources)
+        assert any("describe_by_type(sample_df)" in s for s in code_sources)
 
     # Helpers were seeded
     for h in ("eda_helpers.py", "eda_profile.py", "eda_helpers_call_templates.py"):

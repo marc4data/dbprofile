@@ -14,6 +14,8 @@ import nbformat
 from dbprofile.notebook.cells import md_cell, section_header
 from dbprofile.notebook.classify import classify_columns
 from dbprofile.notebook.sections.s01_setup import build_setup_cells
+from dbprofile.notebook.sections.s02_data_gather import build_data_gather_cells
+from dbprofile.notebook.sections.s03_grain import build_grain_cells
 
 
 def build_notebook(
@@ -38,9 +40,7 @@ def build_notebook(
     connector_type  'snowflake' | 'bigquery' | 'duckdb' — drives the
                     connector-specific setup cell.
     """
-    # Run the classifier so Phase 4+ section builders have kinds available.
-    # The call site is in place; subsequent PRs branch on the result.
-    classify_columns(columns, check_results)
+    classified = classify_columns(columns, check_results)
 
     cells = [
         section_header(1, f"{table} — EDA / Data Quality Review"),
@@ -53,6 +53,12 @@ def build_notebook(
     cells.extend(build_setup_cells(
         cfg=config, schema_name=schema_name, connector_type=connector_type,
     ))
+    cells.extend(build_data_gather_cells(
+        cfg=config, table=table, schema_name=schema_name, columns=columns,
+        classified=classified, check_results=check_results,
+        connector_type=connector_type,
+    ))
+    cells.extend(build_grain_cells(columns=columns, classified=classified))
 
     nb = nbformat.v4.new_notebook()
     nb.cells = cells
