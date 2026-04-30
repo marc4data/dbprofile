@@ -27,12 +27,19 @@ def dev_duckdb(tmp_path) -> Path:
     import duckdb
     db_path = tmp_path / "test.duckdb"
     conn = duckdb.connect(str(db_path))
-    # fct_orders intentionally has TWO continuous columns (amount, discount)
-    # so the Bivariate section's ≥2-numeric-columns gate fires in the e2e test.
+    # fct_orders intentionally has:
+    #   - TWO continuous columns (amount, discount) — exercises Bivariate
+    #   - a DATE column                              — exercises Temporal
+    #   - 30% nulls in `email`                       — exercises s07 NullDensity
+    #   - 20% bad email formats                      — exercises s07 FormatValidation
     conn.execute(
         "CREATE TABLE fct_orders AS "
         "SELECT i AS order_id, "
         "       'cat_' || (i % 5) AS category, "
+        "       CASE WHEN i % 10 < 3 THEN NULL "
+        "            WHEN i % 10 < 5 THEN 'not-an-email-' || i "
+        "            ELSE 'user' || i || '@example.com' "
+        "       END AS email, "
         "       i * 1.25 AS amount, "
         "       (i * 0.05) AS discount, "
         "       (DATE '2026-01-01' + INTERVAL (i % 60) DAY)::DATE AS order_date "
@@ -143,6 +150,17 @@ def test_notebook_command_produces_valid_ipynb(tmp_path, dev_config):
         if "fct_orders" in nb_path.name:
             assert any("plot_distribution(" in s for s in code_sources)
 
+        # s07 DQ Follow-up — fct_orders has nulls + bad email formats so
+        # it should always have the section. dim_customers is clean so
+        # we don't assert on it.
+        if "fct_orders" in nb_path.name:
+            assert any(s.startswith("## Data Quality Follow-up") for s in md_sources)
+            # At least one investigation cell from a known check type
+            assert any(
+                "isna()" in s or "value_counts" in s or "str.match" in s
+                for s in code_sources
+            )
+
     # Helpers were seeded
     for h in ("eda_helpers.py", "eda_profile.py", "eda_helpers_call_templates.py"):
         assert (dq_eda / h).is_file()
@@ -175,7 +193,9 @@ def test_json_path_works_without_db_connection(tmp_path, dev_config):
     runner = CliRunner()
     project_dir = tmp_path / "proj"
 
-    # First produce a JSON via `run`
+    # First produce a JSON via `run`. The dirty fixture intentionally
+    # produces critical findings, which makes `run` exit 1 — that's the
+    # documented behavior in cli.py. We just need the JSON to land.
     r1 = runner.invoke(
         main,
         [
@@ -186,7 +206,7 @@ def test_json_path_works_without_db_connection(tmp_path, dev_config):
         ],
         catch_exceptions=False,
     )
-    assert r1.exit_code == 0, r1.output
+    assert r1.exit_code in (0, 1), r1.output
     # Glob matches .dbprofile_state.json too — filter to the run JSON.
     json_files = [
         p for p in (project_dir / "dq_eda").glob("*.json")
