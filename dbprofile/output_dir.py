@@ -52,8 +52,14 @@ def auto_name(
     *,
     prefix: str = "",
     run_at: datetime | None = None,
+    hhmm: bool = False,
 ) -> str:
-    """Compose an auto-named filename: <prefix><stem>_<YYYYMMDD>.<ext>.
+    """Compose an auto-named filename: <prefix><stem>_<YYYYMMDD>[_HHMM].<ext>.
+
+    The HHMM suffix is opt-in (default off) and used by notebook_writer for
+    the dated-baseline-after-edit path, where the same-day canonical name
+    is already taken by an analyst-modified file and the new baseline
+    needs a unique name.
 
     Examples
     --------
@@ -61,9 +67,11 @@ def auto_name(
     'snowflake_analytics_marts_20260430.html'
     >>> auto_name("fct_trips", "ipynb", prefix="eda_")
     'eda_fct_trips_20260430.ipynb'
+    >>> auto_name("fct_trips", "ipynb", prefix="eda_", hhmm=True)
+    'eda_fct_trips_20260430_1430.ipynb'
     """
     when = run_at or datetime.utcnow()
-    stamp = when.strftime("%Y%m%d")
+    stamp = when.strftime("%Y%m%d_%H%M") if hhmm else when.strftime("%Y%m%d")
     return f"{prefix}{stem}_{stamp}.{ext}"
 
 
