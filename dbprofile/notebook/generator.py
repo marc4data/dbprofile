@@ -1,8 +1,8 @@
 """Top-level notebook builder.
 
-Concatenates per-section cell builders into one notebook. PR 3 wires
-the real Setup section (s01_setup); other sections will swap in as
-their PRs land.
+Concatenates per-section cell builders into one notebook. Each section
+module under dbprofile.notebook.sections owns one part of the
+narrative; this file is just the conductor.
 """
 
 from __future__ import annotations
@@ -11,11 +11,12 @@ from typing import Iterable
 
 import nbformat
 
-from dbprofile.notebook.cells import md_cell, section_header
 from dbprofile.notebook.classify import classify_columns
+from dbprofile.notebook.sections.s00_header import build_header_cells
 from dbprofile.notebook.sections.s01_setup import build_setup_cells
 from dbprofile.notebook.sections.s02_data_gather import build_data_gather_cells
 from dbprofile.notebook.sections.s03_grain import build_grain_cells
+from dbprofile.notebook.sections.s04_univariate import build_univariate_cells
 
 
 def build_notebook(
@@ -42,14 +43,11 @@ def build_notebook(
     """
     classified = classify_columns(columns, check_results)
 
-    cells = [
-        section_header(1, f"{table} — EDA / Data Quality Review"),
-        md_cell(
-            f"**Schema:** `{schema_name}`  \n"
-            f"**Table:** `{table}`  \n"
-            f"**Connector:** `{connector_type}`"
-        ),
-    ]
+    cells: list = []
+    cells.extend(build_header_cells(
+        table=table, schema_name=schema_name, connector_type=connector_type,
+        check_results=check_results,
+    ))
     cells.extend(build_setup_cells(
         cfg=config, schema_name=schema_name, connector_type=connector_type,
     ))
@@ -59,6 +57,9 @@ def build_notebook(
         connector_type=connector_type,
     ))
     cells.extend(build_grain_cells(columns=columns, classified=classified))
+    cells.extend(build_univariate_cells(
+        columns=columns, classified=classified, check_results=check_results,
+    ))
 
     nb = nbformat.v4.new_notebook()
     nb.cells = cells
