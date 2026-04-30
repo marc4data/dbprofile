@@ -19,6 +19,7 @@ from dbprofile.notebook.sections.s03_grain import build_grain_cells
 from dbprofile.notebook.sections.s04_univariate import build_univariate_cells
 from dbprofile.notebook.sections.s05_bivariate import build_bivariate_cells
 from dbprofile.notebook.sections.s06_temporal import build_temporal_cells
+from dbprofile.notebook.sections.s07_dq_followup import build_dq_followup_cells
 
 
 def build_notebook(
@@ -64,6 +65,7 @@ def build_notebook(
     ))
     cells.extend(build_bivariate_cells(columns=columns, classified=classified))
     cells.extend(build_temporal_cells(columns=columns, classified=classified))
+    cells.extend(build_dq_followup_cells(table=table, check_results=check_results))
 
     nb = nbformat.v4.new_notebook()
     nb.cells = cells
