@@ -31,7 +31,9 @@ class FrequencyDistributionCheck(BaseCheck):
             col_name = col["name"]
 
             # First: get distinct count to decide whether to run full freq check
-            distinct_sql = f"SELECT COUNT(DISTINCT {col_name}) AS n FROM {table_ref} {sample}".strip()
+            distinct_sql = (
+                f"SELECT COUNT(DISTINCT {col_name}) AS n FROM {table_ref} {sample}"
+            ).strip()
 
             try:
                 d_rows = connector.execute(distinct_sql)
@@ -51,7 +53,10 @@ class FrequencyDistributionCheck(BaseCheck):
                             detail={
                                 "distinct_count": distinct_count,
                                 "skipped": True,
-                                "reason": f"distinct_count ({distinct_count}) > cardinality_limit ({cardinality_limit})",
+                                "reason": (
+                                    f"distinct_count ({distinct_count}) "
+                                    f"> cardinality_limit ({cardinality_limit})"
+                                ),
                             },
                             sql=distinct_sql,
                         )

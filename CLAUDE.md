@@ -38,12 +38,23 @@ source .venv/bin/activate
 dbprofile run --config examples/config_snowflake.yaml \
   --export-json auto --export-excel auto
 
+# Project-based run — outputs go to <project-dir>/dq_eda/ and the
+# notebook helpers (eda_helpers.py / eda_profile.py / eda_helpers_call_templates.py)
+# are copied alongside on first use.
+dbprofile run --config examples/config_snowflake.yaml \
+  --project-dir ~/projects/portfolio_nyc_tlc \
+  --export-json auto --export-excel auto
+
 # Regenerate Excel from a previous JSON (no Snowflake connection needed)
-dbprofile excel --json reports/<file>.json \
-  --config examples/config_snowflake.yaml --output reports/workbook.xlsx
+dbprofile excel --json <dir>/dq_eda/<file>.json \
+  --config examples/config_snowflake.yaml \
+  --project-dir ~/projects/portfolio_nyc_tlc
 ```
 
-Output files land in `./reports/` and auto-name from the data source + datetime (e.g., `snowflake_analytics_dbt_malex_marts_20260418_1430.html`).
+Output files auto-name from the data source + date — e.g.
+`snowflake_analytics_dbt_malex_marts_20260418.html`. With `--project-dir`,
+they land in `<project-dir>/dq_eda/`. Without it, they fall back to
+`./reports/`.
 
 ---
 

@@ -44,7 +44,8 @@ class NullDensityCheck(BaseCheck):
                 # Use STRING (supported by BigQuery, Snowflake, DuckDB) rather
                 # than VARCHAR which BigQuery does not accept.
                 sentinel_cases.append(
-                    f"SUM(CASE WHEN CAST({col_name} AS STRING) = {_DATE_SENTINEL} THEN 1 ELSE 0 END)"
+                    f"SUM(CASE WHEN CAST({col_name} AS STRING) = {_DATE_SENTINEL} "
+                    f"THEN 1 ELSE 0 END)"
                 )
 
             sentinel_select = (
@@ -61,7 +62,8 @@ class NullDensityCheck(BaseCheck):
                 f"SELECT "
                 f"  COUNT(*) AS total, "
                 f"  SUM(CASE WHEN {col_name} IS NULL THEN 1 ELSE 0 END) AS null_count, "
-                f"  ROUND(100.0 * AVG(CASE WHEN {col_name} IS NULL THEN 1.0 ELSE 0.0 END), 4) AS null_pct"
+                f"  ROUND(100.0 * AVG(CASE WHEN {col_name} IS NULL "
+                f"THEN 1.0 ELSE 0.0 END), 4) AS null_pct"
                 f"  {sentinel_select} "
                 f"FROM {table_ref} {sample}"
             ).strip()
@@ -96,7 +98,10 @@ class NullDensityCheck(BaseCheck):
                             null_sample_rows = {
                                 "columns": sample_cols,
                                 "rows": [
-                                    [str(row[c]) if row[c] is not None else None for c in sample_cols]
+                                    [
+                                        str(row[c]) if row[c] is not None else None
+                                        for c in sample_cols
+                                    ]
                                     for row in sample_data
                                 ],
                             }

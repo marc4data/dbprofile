@@ -116,7 +116,10 @@ def run_profile(
         console.print("[yellow]No tables found. Check your scope config.[/yellow]")
         return results
 
-    console.print(f"[bold]Profiling {len(work)} table(s) across {len(schemas)} schema(s) with {len(checks)} check(s)[/bold]")
+    console.print(
+        f"[bold]Profiling {len(work)} table(s) across {len(schemas)} schema(s) "
+        f"with {len(checks)} check(s)[/bold]"
+    )
     console.print(f"  Sample rate: {config.checks.sample_rate * 100:.0f}%")
     if dry_run:
         console.print("[yellow]  DRY RUN — queries will be shown but not executed[/yellow]")

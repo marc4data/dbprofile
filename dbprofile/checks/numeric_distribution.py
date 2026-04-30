@@ -102,7 +102,9 @@ WHERE {col_name} IS NOT NULL
 """.strip()
 
                 outlier_rows = connector.execute(outlier_sql)
-                outlier_count = int((outlier_rows[0].get("outlier_count") or 0) if outlier_rows else 0)
+                outlier_count = int(
+                    (outlier_rows[0].get("outlier_count") or 0) if outlier_rows else 0
+                )
                 outlier_pct = round(100.0 * outlier_count / non_null, 4) if non_null else 0.0
 
                 severity = self.severity_from_pct(
@@ -147,7 +149,10 @@ ORDER BY 1
                         cumulative = 0.0
                         for i in range(num_bins):
                             count = bin_counts.get(i, 0)
-                            pct = round(100.0 * count / total_in_fence, 2) if total_in_fence > 0 else 0.0
+                            pct = (
+                                round(100.0 * count / total_in_fence, 2)
+                                if total_in_fence > 0 else 0.0
+                            )
                             cumulative = round(cumulative + pct, 2)
                             bl = hist_low + i * bin_width
                             bh = hist_low + (i + 1) * bin_width
