@@ -20,8 +20,6 @@ The tool supports Snowflake, BigQuery, and DuckDB connectors.
 
 **When running against Snowflake, always use `examples/config_snowflake.yaml`** — this is the primary Snowflake config. It uses key-pair authentication and targets the `Analytics` database.
 
-Do NOT use `config_snowflake_marts_DEPRECATE.yaml` — it is deprecated and uses password auth.
-
 | Config | Use When |
 |---|---|
 | `examples/config_snowflake.yaml` | Snowflake profiling (preferred) |
