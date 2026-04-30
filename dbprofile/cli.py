@@ -235,6 +235,131 @@ def html(json_path: str, config: str, project_dir: str | None, output: str | Non
 
 
 @main.command()
+@click.option("--config", "-c", required=True, type=click.Path(exists=True),
+              help="Path to YAML config file.")
+@click.option("--project-dir", "-p", default=None, type=click.Path(),
+              help="Project folder. Notebooks land in <project-dir>/dq_eda/. "
+                   "Falls back to ./reports/ when omitted.")
+@click.option("--json", "json_path", default=None, type=click.Path(exists=True),
+              help="Re-generate from an existing JSON export "
+                   "(no DB connection needed).")
+@click.option("--tables", default=None, multiple=True,
+              help="Limit to specific tables (default: all in config scope). "
+                   "Pass once per table.")
+@click.option("--update-helpers", is_flag=True,
+              help="Refresh helpers in dq_eda/ even if analyst-modified "
+                   "(originals saved to .backups/).")
+@click.option("--force", is_flag=True,
+              help="Overwrite analyst-modified notebooks "
+                   "(originals saved to .backups/).")
+def notebook(
+    config: str,
+    project_dir: str | None,
+    json_path: str | None,
+    tables: tuple[str, ...],
+    update_helpers: bool,
+    force: bool,
+) -> None:
+    """Generate a Jupyter EDA notebook for each profiled table."""
+    from dbprofile.config import load_config
+    from dbprofile.notebook.generator import build_notebook
+    from dbprofile.notebook.helper_copy import copy_helpers
+    from dbprofile.notebook.notebook_writer import write_notebook
+    from dbprofile.report.renderer import load_results_from_json
+
+    cfg = load_config(config)
+    out_dir = resolve_output_dir(project_dir)
+
+    # Always seed/refresh helpers — analysts opening the notebook need them.
+    copy_helpers(out_dir, force=update_helpers)
+
+    # Acquire check_results + per-table column lists. Two paths:
+    #   --json:  reconstitute columns from SchemaAuditCheck.detail.columns
+    #   default: run a fresh profile + connector.get_columns() for each table
+    if json_path:
+        results = load_results_from_json(json_path)
+        column_map, schema_map = _columns_from_results(results)
+        run_at = results[0].run_at if results else datetime.utcnow()
+    else:
+        from dbprofile.connectors.base import get_connector
+        from dbprofile.orchestrator import run_profile
+
+        connector = get_connector(cfg)
+        try:
+            results = run_profile(cfg, connector)
+            column_map, schema_map = _columns_from_results(results)
+            # Fill in any tables that lacked schema_audit results from the connector.
+            for table in {r.table for r in results}:
+                if table not in column_map:
+                    schema = next(
+                        (r.schema for r in results if r.table == table), "main",
+                    )
+                    column_map[table] = connector.get_columns(table, schema)
+                    schema_map[table] = schema
+        finally:
+            connector.close()
+        run_at = results[0].run_at if results else datetime.utcnow()
+
+    if not results:
+        console.print("[yellow]No results to build notebooks from.[/yellow]")
+        return
+
+    # Apply --tables filter
+    target_tables = sorted({r.table for r in results})
+    if tables:
+        wanted = set(tables)
+        target_tables = [t for t in target_tables if t in wanted]
+        missing = wanted - set(target_tables)
+        if missing:
+            console.print(f"[yellow]--tables not found in scope: {sorted(missing)}[/yellow]")
+
+    if not target_tables:
+        console.print("[yellow]No tables matched after --tables filter.[/yellow]")
+        return
+
+    connector_type = cfg.connection.dialect or "duckdb"
+    console.print(f"[bold]Building {len(target_tables)} notebook(s)…[/bold]")
+
+    for table in target_tables:
+        cols = column_map.get(table, [])
+        table_results = [r for r in results if r.table == table]
+        schema_name = schema_map.get(table, "main")
+
+        nb = build_notebook(
+            table=table,
+            schema_name=schema_name,
+            columns=cols,
+            check_results=table_results,
+            config=cfg,
+            connector_type=connector_type,
+        )
+        path, outcome = write_notebook(nb, out_dir, table, force=force, run_at=run_at)
+        console.print(f"  [green]{outcome:>30}[/green] → {path.name}")
+
+
+def _columns_from_results(
+    results: list,
+) -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """Extract per-table column lists + schemas from SchemaAuditCheck results.
+
+    Returns (column_map, schema_map). column_map[table] is the list of
+    column dicts {name, data_type, ...}. schema_map[table] is the schema
+    name. Tables without a schema_audit result are simply absent from
+    column_map (the caller can fall back to connector.get_columns()).
+    """
+    column_map: dict[str, list[dict]] = {}
+    schema_map: dict[str, str] = {}
+    for r in results:
+        if r.check_name != "schema_audit":
+            continue
+        cols = (r.detail or {}).get("columns")
+        if cols is not None:
+            column_map[r.table] = cols
+            schema_map[r.table] = r.schema
+    return column_map, schema_map
+
+
+@main.command()
 @click.argument("baseline_json", type=click.Path(exists=True))
 @click.argument("current_json", type=click.Path(exists=True))
 @click.option("--output", "-o", default="diff_report.html")

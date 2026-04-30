@@ -22,13 +22,13 @@ recorded hash to decide whether the analyst has modified the file.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
 
 from dbprofile.notebook import state
 from dbprofile.notebook import templates as templates_pkg
+from dbprofile.notebook.backup import BACKUPS_DIRNAME, backup_file
 
 console = Console()
 
@@ -38,17 +38,12 @@ HELPERS = (
     "eda_helpers_call_templates.py",
 )
 
-BACKUPS_DIRNAME = ".backups"
 GITIGNORE_FILENAME = ".gitignore"
 
 
 def _templates_dir() -> Path:
     """Directory containing the packaged helper source files."""
     return Path(templates_pkg.__file__).parent
-
-
-def _backup_dir(out_dir: Path) -> Path:
-    return out_dir / BACKUPS_DIRNAME
 
 
 def _ensure_gitignore(out_dir: Path) -> None:
@@ -61,17 +56,6 @@ def _ensure_gitignore(out_dir: Path) -> None:
         f"{BACKUPS_DIRNAME}/\n",
         encoding="utf-8",
     )
-
-
-def _backup(target: Path, out_dir: Path) -> Path:
-    """Copy target into dq_eda/.backups/<stem>_backup_<YYYYMMDD_HHMM><ext>."""
-    backups = _backup_dir(out_dir)
-    backups.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M")
-    backup_name = f"{target.stem}_backup_{ts}{target.suffix}"
-    backup_path = backups / backup_name
-    shutil.copy2(target, backup_path)
-    return backup_path
 
 
 def _classify(helper_name: str, out_dir: Path) -> str:
@@ -140,7 +124,7 @@ def copy_helpers(out_dir: Path, *, force: bool = False) -> dict[str, str]:
 
         elif status == "analyst_modified":
             if force:
-                _backup(dst, out_dir)
+                backup_file(dst, out_dir)
                 shutil.copy2(src, dst)
                 new_hashes[helper] = state.file_hash(src)
                 outcomes[helper] = "overwritten_with_backup"
