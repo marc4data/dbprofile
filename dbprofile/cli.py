@@ -41,7 +41,8 @@ def main() -> None:
               help="Override sample_rate from config (0.0–1.0).")
 @click.option("--sample-method", default=None,
               type=click.Choice(["bernoulli", "system"], case_sensitive=False),
-              help="Override sampling method: bernoulli (row-level, default) or system (block-level, faster).")
+              help="Override sampling method: bernoulli (row-level, default) "
+                   "or system (block-level, faster).")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print queries without executing. Shows estimated BQ cost.")
 @click.option("--export-json", default=None,
@@ -108,7 +109,10 @@ def run(
         from dbprofile.notebook.helper_copy import copy_helpers
         copy_helpers(out_dir)
 
-    html_out = output if output is not None else str(out_dir / auto_name(stem, "html", run_at=run_at))
+    html_out = (
+        output if output is not None
+        else str(out_dir / auto_name(stem, "html", run_at=run_at))
+    )
 
     if export_json is not None:
         export_json = (
@@ -172,12 +176,14 @@ def excel(json_path: str, config: str, project_dir: str | None, output: str | No
     """Build an Excel workbook from a saved JSON results file — no database needed.
 
     First run:   dbprofile run --config cfg.yaml --export-json auto --project-dir <dir>
-    Later runs:  dbprofile excel --json <dir>/dq_eda/<file>.json --config cfg.yaml --project-dir <dir>
+    Later runs:  dbprofile excel --json <dir>/dq_eda/<file>.json
+                                --config cfg.yaml --project-dir <dir>
     """
-    from dbprofile.config import load_config
-    from dbprofile.report.renderer import load_results_from_json, _build_report_context
-    from dbprofile.report.excel_export import write_excel
     from datetime import datetime
+
+    from dbprofile.config import load_config
+    from dbprofile.report.excel_export import write_excel
+    from dbprofile.report.renderer import _build_report_context, load_results_from_json
 
     cfg = load_config(config)
     results = load_results_from_json(json_path)
@@ -209,7 +215,8 @@ def html(json_path: str, config: str, project_dir: str | None, output: str | Non
     """Rebuild an HTML report from a saved JSON results file — no database needed.
 
     First run:   dbprofile run --config cfg.yaml --export-json auto --project-dir <dir>
-    Later runs:  dbprofile html --json <dir>/dq_eda/<file>.json --config cfg.yaml --project-dir <dir>
+    Later runs:  dbprofile html --json <dir>/dq_eda/<file>.json
+                                --config cfg.yaml --project-dir <dir>
     """
     from dbprofile.config import load_config
     from dbprofile.report.renderer import load_results_from_json, render_report

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from dbprofile.config import CheckThresholds, ProfileConfig
+    from dbprofile.config import ProfileConfig
     from dbprofile.connectors.base import BaseConnector
 
 

@@ -1,4 +1,4 @@
-"""Configuration loader — reads YAML config, validates with Pydantic, resolves ${ENV_VAR} placeholders."""
+"""Configuration loader — YAML + Pydantic validation, resolves ${ENV_VAR} placeholders."""
 
 from __future__ import annotations
 

@@ -15,7 +15,6 @@ from dbprofile.output_dir import (
     run_stem,
 )
 
-
 # ── auto_name ────────────────────────────────────────────────────────────────
 
 class TestAutoName:
@@ -25,7 +24,8 @@ class TestAutoName:
 
     def test_with_prefix(self):
         when = datetime(2026, 4, 30)
-        assert auto_name("fct_trips", "ipynb", prefix="eda_", run_at=when) == "eda_fct_trips_20260430.ipynb"
+        result = auto_name("fct_trips", "ipynb", prefix="eda_", run_at=when)
+        assert result == "eda_fct_trips_20260430.ipynb"
 
     def test_uses_now_when_run_at_omitted(self):
         # Just verify it doesn't crash and produces an 8-digit date.

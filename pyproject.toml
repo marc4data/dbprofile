@@ -44,6 +44,11 @@ dbprofile = "dbprofile.cli:main"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Notebook helper templates ship as analyst-facing artifacts, not dbprofile
+# source code — they intentionally contain placeholder names (sample_df,
+# pickup_df, etc.) that ruff flags as undefined, and chart code formatted
+# for readability over line-length conformance.
+extend-exclude = ["dbprofile/notebook/templates"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

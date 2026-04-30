@@ -33,7 +33,10 @@ class SampleRowsCheck(BaseCheck):
                 return []
 
             col_names = list(rows[0].keys())
-            row_data = [[str(row.get(c)) if row.get(c) is not None else None for c in col_names] for row in rows]
+            row_data = [
+                [str(row.get(c)) if row.get(c) is not None else None for c in col_names]
+                for row in rows
+            ]
 
             return [CheckResult(
                 table=table,

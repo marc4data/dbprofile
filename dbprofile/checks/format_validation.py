@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from dbprofile.checks.base import BaseCheck, CheckResult
@@ -21,8 +20,8 @@ _FORMAT_RULES: list[tuple[str, str, str]] = [
     ("postal",   "zip_code", r"^\d{5}(-\d{4})?$"),
     ("url",      "url",      r"^https?://"),
     ("website",  "url",      r"^https?://"),
-    ("uuid",     "uuid",     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"),
-    ("guid",     "uuid",     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"),
+    ("uuid",     "uuid",     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"),  # noqa: E501
+    ("guid",     "uuid",     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"),  # noqa: E501
     ("country",  "country",  r"^[A-Z]{2}$"),
     ("currency", "currency", r"^[A-Z]{3}$"),
     ("iso_curr", "currency", r"^[A-Z]{3}$"),
@@ -125,7 +124,9 @@ WHERE {col_name} IS NOT NULL
 
             # --- enum cardinality check ---
             if any(pat in col_lower for pat in _ENUM_PATTERNS):
-                distinct_sql = f"SELECT COUNT(DISTINCT {col_name}) AS n FROM {table_ref} {sample}".strip()
+                distinct_sql = (
+                    f"SELECT COUNT(DISTINCT {col_name}) AS n FROM {table_ref} {sample}"
+                ).strip()
                 try:
                     d_rows = connector.execute(distinct_sql)
                     distinct_count = int(d_rows[0]["n"]) if d_rows else 0
@@ -142,7 +143,10 @@ WHERE {col_name} IS NOT NULL
                             detail={
                                 "distinct_count": distinct_count,
                                 "warn_threshold": _ENUM_CARDINALITY_WARN,
-                                "note": "High cardinality on enum-like column — possible free-text leak",
+                                "note": (
+                                    "High cardinality on enum-like column "
+                                    "— possible free-text leak"
+                                ),
                             },
                             sql=distinct_sql,
                         )

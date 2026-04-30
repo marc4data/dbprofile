@@ -20,7 +20,6 @@ from dbprofile.notebook.helper_copy import (
     copy_helpers,
 )
 
-
 # Helpers ---------------------------------------------------------------------
 
 def _read(p: Path) -> str:
@@ -140,6 +139,7 @@ class TestMissingState:
         # Helpers present but no state file → can't prove they're untouched.
         # Safe default: treat as analyst-modified, leave alone.
         from shutil import copy2
+
         from dbprofile.notebook import templates as templates_pkg
         src_dir = Path(templates_pkg.__file__).parent
         for h in HELPERS:

@@ -522,7 +522,10 @@ def _build_top_actions(all_results: list[CheckResult]) -> list[dict]:
         })
 
     # 3. Format violations
-    fmt_crit = [r for r in all_results if r.check_name == "format_validation" and r.severity == "critical"]
+    fmt_crit = [
+        r for r in all_results
+        if r.check_name == "format_validation" and r.severity == "critical"
+    ]
     if fmt_crit:
         tables = list(dict.fromkeys(r.table for r in fmt_crit))
         actions.append({
@@ -533,7 +536,10 @@ def _build_top_actions(all_results: list[CheckResult]) -> list[dict]:
         })
 
     # 4. Numeric outliers
-    out_crit = [r for r in all_results if r.check_name == "numeric_distribution" and r.severity == "critical"]
+    out_crit = [
+        r for r in all_results
+        if r.check_name == "numeric_distribution" and r.severity == "critical"
+    ]
     if out_crit:
         col_strs = [f"{r.table}.{r.column}" for r in out_crit[:3]]
         actions.append({
@@ -549,7 +555,10 @@ def _build_top_actions(all_results: list[CheckResult]) -> list[dict]:
                 and r.metric == "daily_distribution"
                 and r.severity in ("warn", "critical")):
             actions.append({
-                "text": f"{r.table}: daily volume anomaly detected — possible duplicate loads or data gaps.",
+                "text": (
+                    f"{r.table}: daily volume anomaly detected — "
+                    "possible duplicate loads or data gaps."
+                ),
                 "anchor": f"{r.table}-row_count",
                 "severity": r.severity,
             })
@@ -700,7 +709,10 @@ def _build_report_context(
     conn = config.connection
     scope = config.scope
     account_display = conn.account or conn.project or "—"
-    database_display = scope.dataset or scope.database or (scope.schemas[0] if scope.schemas else "—")
+    database_display = (
+        scope.dataset or scope.database
+        or (scope.schemas[0] if scope.schemas else "—")
+    )
     schema_display = ", ".join(scope.schemas) if scope.schemas else (scope.dataset or "—")
     role_display = conn.role or "—"
 
