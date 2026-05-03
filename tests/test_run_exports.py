@@ -168,6 +168,35 @@ class TestRunWithProjectDir:
         assert len(_real_files(dq, "html")) == 1
         assert len(_real_files(dq, "json")) == 1
 
+    def test_force_overwrites_analyst_modified_notebooks(self, tmp_path, dev_config):
+        """`run --force` should propagate down to write_notebook so analyst-
+        modified notebooks get overwritten in-place (originals to .backups/)."""
+        import nbformat
+        proj = tmp_path / "proj"
+
+        # First run: create the initial notebooks
+        r1 = _run(["run", "--config", str(dev_config), "--project-dir", str(proj)])
+        assert r1.exit_code in (0, 1), r1.output
+
+        canonical = next((proj / "dq_eda").glob("eda_fct_orders_*.ipynb"))
+        # Simulate an analyst editing a cell
+        nb = nbformat.read(canonical, as_version=4)
+        nb.cells.append(nbformat.v4.new_markdown_cell("# analyst added this"))
+        nbformat.write(nb, canonical)
+
+        # Second run with --force: should overwrite + back up
+        r2 = _run([
+            "run", "--config", str(dev_config),
+            "--project-dir", str(proj), "--force",
+        ])
+        assert r2.exit_code in (0, 1), r2.output
+        # Backup written
+        backups = list((proj / "dq_eda" / ".backups").glob("eda_fct_orders_*backup*.ipynb"))
+        assert len(backups) == 1
+        # Canonical no longer contains the analyst's cell
+        new = nbformat.read(canonical, as_version=4)
+        assert not any("# analyst added this" in str(c.source) for c in new.cells)
+
 
 class TestRunWithoutProjectDir:
     """Without --project-dir, behavior must stay backward-compatible:
