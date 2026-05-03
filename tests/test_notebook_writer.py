@@ -45,6 +45,20 @@ class TestWrittenNew:
         assert path.name == "eda_fct_trips_20260430.ipynb"
         assert path.exists()
 
+    def test_filename_lowercased_even_when_table_is_uppercase(self, tmp_path, fixed_run_at):
+        """Snowflake returns table names UPPERCASE. The filename should
+        still be lowercase for usability — the table identity inside
+        the notebook keeps the original case."""
+        nb = _new_nb("Hello")
+        path, outcome = write_notebook(nb, tmp_path, "FCT_TRIPS", run_at=fixed_run_at)
+
+        assert outcome == "written_new"
+        assert path.name == "eda_fct_trips_20260430.ipynb"
+        # The notebook's metadata still records the source table case
+        import nbformat as _nb
+        meta = _nb.read(path, as_version=4)["metadata"]["dbprofile"]
+        assert meta["table"] == "FCT_TRIPS"
+
     def test_embeds_metadata_with_source_hash(self, tmp_path, fixed_run_at):
         nb = _new_nb("Hello")
         write_notebook(nb, tmp_path, "fct_trips", run_at=fixed_run_at)

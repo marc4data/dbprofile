@@ -68,12 +68,19 @@ def build_dq_followup_cells(
 
 
 def _flagged_for_table(check_results, table: str) -> list:
-    """Subset of results for `table` whose severity is critical or warn."""
+    """Subset of results for `table` that are worth a follow-up sub-section.
+
+    Filters on (a) severity in {critical, warn} and (b) a check-specific
+    "actionable" check that drops findings whose detail dict has nothing
+    useful to surface (e.g. temporal_consistency with empty gap_days).
+    """
     out = []
     for r in check_results:
         if getattr(r, "table", None) != table:
             continue
         if getattr(r, "severity", "") not in _FLAGGED_SEVERITIES:
+            continue
+        if not _is_actionable(r):
             continue
         out.append(r)
     return out
@@ -93,6 +100,18 @@ def _sort_findings(results: list) -> list:
 
 
 # ── Dispatch by check_name ───────────────────────────────────────────────────
+
+
+def _is_actionable(r) -> bool:
+    """Skip findings where the check fired but the detail dict has nothing
+    actionable to surface. Keeps the section focused on real investigation
+    targets rather than empty placeholders.
+    """
+    check_name = getattr(r, "check_name", "")
+    detail = getattr(r, "detail", {}) or {}
+    if check_name == "temporal_consistency":
+        return bool(detail.get("gap_days"))
+    return True
 
 
 def _per_finding_cells(r) -> list[nbformat.NotebookNode]:

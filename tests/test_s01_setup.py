@@ -122,14 +122,20 @@ class TestSnowflake:
         assert "DATABASE = 'ANALYTICS'" in src
         assert "SCHEMA   = 'DBT_MALEX_MARTS'" in src
 
-    def test_loads_dotenv(self):
+    def test_inlines_env_loader_no_dotenv_dep(self):
         src = _build_setup_source(
             cfg=_snowflake_cfg(),
             schema_name="s",
             connector_type="snowflake",
         )
-        assert "from dotenv import load_dotenv" in src
-        assert "load_dotenv()" in src
+        # We dropped python-dotenv in favor of an inline parser so analysts
+        # don't need to pip-install it just to read .env.
+        assert "from dotenv import" not in src
+        assert "_load_env_file" in src
+        # Walks up from cwd through parents
+        assert "Path.cwd().parents" in src
+        # Honors pre-set env vars (uses setdefault, not a forced overwrite)
+        assert "os.environ.setdefault" in src
 
     def test_key_pair_uses_pkcs8_der(self):
         src = _build_setup_source(

@@ -53,6 +53,31 @@ class TestFirstCopy:
         assert gi.is_file()
         assert f"{BACKUPS_DIRNAME}/" in _read(gi)
 
+    def test_drops_requirements_txt(self, tmp_path):
+        """First copy seeds requirements.txt so analysts know what to
+        pip-install for the generated notebook to actually run."""
+        copy_helpers(tmp_path)
+        req = tmp_path / "requirements.txt"
+        assert req.is_file()
+        body = _read(req)
+        # Always-required deps are uncommented
+        assert "matplotlib>=" in body
+        assert "pandas>=" in body
+        # Connector-specific deps are commented out by default
+        assert "# snowflake-connector-python>=" in body
+        assert "# duckdb>=" in body
+
+    def test_requirements_txt_preserved_on_re_copy(self, tmp_path):
+        """If the analyst customizes requirements.txt, re-running
+        copy_helpers must NOT overwrite it."""
+        copy_helpers(tmp_path)
+        req = tmp_path / "requirements.txt"
+        req.write_text("# my custom deps\npandas==2.1.0\n", encoding="utf-8")
+
+        copy_helpers(tmp_path)
+
+        assert _read(req) == "# my custom deps\npandas==2.1.0\n"
+
 
 # ── Case 2: re-copy on unmodified files ──────────────────────────────────────
 
