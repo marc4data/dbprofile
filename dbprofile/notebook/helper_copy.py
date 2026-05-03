@@ -39,6 +39,35 @@ HELPERS = (
 )
 
 GITIGNORE_FILENAME = ".gitignore"
+REQUIREMENTS_FILENAME = "requirements.txt"
+
+# Runtime deps the generated EDA notebooks need on the analyst's side.
+# Includes every dialect's connector — the user can trim what they don't use.
+# We only write this file if it's not already there, so the analyst can
+# customize it freely.
+_REQUIREMENTS_TEMPLATE = """\
+# dbprofile-generated EDA notebook runtime deps.
+# Install with:  pip install -r requirements.txt
+#
+# Always required:
+matplotlib>=3.7
+pandas>=2.0
+numpy>=1.24
+ipython>=8.0
+seaborn>=0.12
+mplcursors>=0.5
+
+# Connector-specific (uncomment what you need; leave the rest commented to
+# avoid pulling in deps you don't use):
+# snowflake-connector-python>=3.0
+# cryptography>=41.0
+# google-cloud-bigquery>=3.0
+# google-auth>=2.0
+# duckdb>=0.9
+
+# Jupyter — install separately if not already present:
+#   pip install jupyterlab
+"""
 
 
 def _templates_dir() -> Path:
@@ -56,6 +85,17 @@ def _ensure_gitignore(out_dir: Path) -> None:
         f"{BACKUPS_DIRNAME}/\n",
         encoding="utf-8",
     )
+
+
+def _ensure_requirements(out_dir: Path) -> None:
+    """Drop requirements.txt in dq_eda/ on first copy. Never overwrites —
+    the analyst owns the file once it exists (they may have customized
+    versions, removed unused deps, etc.).
+    """
+    req = out_dir / REQUIREMENTS_FILENAME
+    if req.exists():
+        return
+    req.write_text(_REQUIREMENTS_TEMPLATE, encoding="utf-8")
 
 
 def _classify(helper_name: str, out_dir: Path) -> str:
@@ -135,6 +175,7 @@ def copy_helpers(out_dir: Path, *, force: bool = False) -> dict[str, str]:
     if new_hashes:
         state.update_helper_versions(out_dir, new_hashes)
         _ensure_gitignore(out_dir)
+        _ensure_requirements(out_dir)
 
     if skipped_modified:
         console.print(

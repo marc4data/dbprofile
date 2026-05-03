@@ -61,14 +61,21 @@ class TestBoundaryConditions:
             for c in cells
         )
 
-    def test_uses_agg_with_correct_metrics(self):
+    def test_uses_defensive_per_column_aggregation(self):
+        """The single-call .agg(['nunique','min','max']) form crashes on
+        mixed-type columns (str + NaN). We switched to per-column min/max
+        wrapped in try/except to handle that case gracefully.
+        """
         cols, classified = _cols_and_kinds()
         cells = build_grain_cells(columns=cols, classified=classified)
         boundary_src = next(
             c["source"] for c in cells
             if c["cell_type"] == "code" and "_boundary_cols" in c["source"]
         )
-        assert ".agg(['nunique', 'min', 'max'])" in boundary_src
+        assert "_safe_boundary" in boundary_src
+        assert "s.nunique(dropna=True)" in boundary_src
+        assert "except TypeError" in boundary_src
+        assert "(mixed types)" in boundary_src
 
 
 class TestCardinalitySummary:

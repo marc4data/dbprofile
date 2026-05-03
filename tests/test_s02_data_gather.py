@@ -188,6 +188,20 @@ class TestBuildDataGatherCells:
         assert "daily_df" in cells[6]["source"]
         assert "GROUP BY 1" in cells[6]["source"]
 
+    def test_daily_df_lowercases_columns_at_load(self):
+        """Snowflake/BigQuery return aliases UPPERCASE unless quoted; the
+        downstream temporal section indexes daily_df['day']/['row_cnt'], so
+        we lowercase columns at load to keep the chart cell dialect-agnostic.
+        """
+        cols, classified, results = self._basic_inputs(with_date=True)
+        cells = build_data_gather_cells(
+            cfg=_duckdb_cfg(), table="fct_orders", schema_name="main",
+            columns=cols, classified=classified, check_results=results,
+            connector_type="duckdb",
+        )
+        daily_src = cells[6]["source"]
+        assert "daily_df.columns = daily_df.columns.str.lower()" in daily_src
+
     def test_no_sampling_clause_when_table_under_target(self):
         cols, classified, results = self._basic_inputs(with_date=False, row_count=1_000)
         cells = build_data_gather_cells(

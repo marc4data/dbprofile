@@ -211,7 +211,13 @@ def _date_trunc_day(connector_type: str, col: str) -> str:
 
 
 def _daily_df_source(*, table_ref: str, date_col: str, connector_type: str) -> str:
-    """daily_df query — date column truncated to day so timestamps aggregate."""
+    """daily_df query — date column truncated to day so timestamps aggregate.
+
+    Snowflake (and BigQuery, with backtick aliases) returns column names
+    UPPERCASE unless the alias is quoted. The downstream temporal section
+    indexes daily_df['day'] / ['row_cnt'], so we lowercase the columns at
+    load to keep the chart cell dialect-agnostic.
+    """
     day_expr = _date_trunc_day(connector_type, date_col)
     return (
         "if FORCE_RELOAD or 'daily_df' not in dir():\n"
@@ -221,6 +227,7 @@ def _daily_df_source(*, table_ref: str, date_col: str, connector_type: str) -> s
         f"        GROUP BY 1\n"
         f"        ORDER BY 1\n"
         '    """)\n'
+        "    daily_df.columns = daily_df.columns.str.lower()\n"
         "    print(f'Queried: {len(daily_df):,} days')\n"
         "else:\n"
         "    print(f'Cached:  {len(daily_df):,} days')"

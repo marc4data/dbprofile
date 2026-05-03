@@ -157,6 +157,29 @@ def _reload_guard_block() -> str:
 # ── Connector-specific blocks ────────────────────────────────────────────────
 
 
+_INLINE_DOTENV = (
+    "# ── .env loader (inlined — no python-dotenv dependency) ──────────────\n"
+    "import os\n"
+    "from pathlib import Path\n"
+    "\n"
+    "def _load_env_file():\n"
+    "    \"\"\"Walk from cwd upward, parse the first .env we find into "
+    "os.environ.\n"
+    "    Skips comments + blank lines; respects pre-set env vars.\"\"\"\n"
+    "    for _parent in [Path.cwd(), *Path.cwd().parents]:\n"
+    "        _env = _parent / '.env'\n"
+    "        if _env.is_file():\n"
+    "            for _line in _env.read_text().splitlines():\n"
+    "                _line = _line.strip()\n"
+    "                if not _line or _line.startswith('#') or '=' not in _line:\n"
+    "                    continue\n"
+    "                _k, _, _v = _line.partition('=')\n"
+    '                os.environ.setdefault(_k.strip(), _v.strip().strip("\\"\'"))\n'
+    "            return\n"
+    "_load_env_file()"
+)
+
+
 def _connector_block(*, cfg, schema_name: str, connector_type: str) -> str:
     if connector_type == "snowflake":
         return _snowflake_connector(cfg=cfg, schema_name=schema_name)
@@ -172,14 +195,12 @@ def _snowflake_connector(*, cfg, schema_name: str) -> str:
     database = (cfg.scope.database or "").upper()
     schema = (schema_name or "").upper()
     return (
+        f"{_INLINE_DOTENV}\n"
+        "\n"
         "# ── Connection (Snowflake — key-pair via .env) ───────────────────────\n"
-        "import os\n"
-        "from dotenv import load_dotenv\n"
         "import snowflake.connector\n"
         "from cryptography.hazmat.backends import default_backend\n"
         "from cryptography.hazmat.primitives import serialization\n"
-        "\n"
-        "load_dotenv()   # picks up .env from cwd or any parent directory\n"
         "\n"
         f"DATABASE = '{database}'\n"
         f"SCHEMA   = '{schema}'\n"
@@ -215,12 +236,10 @@ def _bigquery_connector(*, cfg, schema_name: str) -> str:
     # In BigQuery terminology, the "dataset" plays the role of schema.
     dataset = schema_name or cfg.scope.dataset or ""
     return (
-        "# ── Connection (BigQuery — ADC or GOOGLE_APPLICATION_CREDENTIALS) ────\n"
-        "import os\n"
-        "from dotenv import load_dotenv\n"
-        "from google.cloud import bigquery\n"
+        f"{_INLINE_DOTENV}\n"
         "\n"
-        "load_dotenv()\n"
+        "# ── Connection (BigQuery — ADC or GOOGLE_APPLICATION_CREDENTIALS) ────\n"
+        "from google.cloud import bigquery\n"
         "\n"
         f"PROJECT = '{project}'\n"
         f"DATASET = '{dataset}'\n"

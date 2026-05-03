@@ -80,12 +80,30 @@ def _boundary_source(boundary_cols: list[str]) -> str:
 
     Generates a list literal of column names so the analyst can edit it
     directly in the notebook without referring back to the generator.
+
+    Uses a defensive per-column aggregation rather than a single
+    sample_df[cols].agg(...) call. The single-call form crashes with
+    'str <= float' when any object column has NULLs mixed with strings
+    (a common Snowflake → pandas pattern). Per-column .min()/.max()
+    respects skipna=True and falls back to '(mixed types)' for the
+    rare truly-mixed columns.
     """
     cols_repr = ",\n    ".join(f'"{c}"' for c in boundary_cols)
     return (
         f"_boundary_cols = [\n    {cols_repr},\n]\n"
         "\n"
-        "_summary = sample_df[_boundary_cols].agg(['nunique', 'min', 'max']).T\n"
-        "_summary.columns = ['distinct_count', 'min', 'max']\n"
+        "def _safe_boundary(s):\n"
+        "    out = {'distinct_count': int(s.nunique(dropna=True))}\n"
+        "    try:\n"
+        "        out['min'] = s.min()\n"
+        "        out['max'] = s.max()\n"
+        "    except TypeError:\n"
+        "        out['min'] = '(mixed types)'\n"
+        "        out['max'] = '(mixed types)'\n"
+        "    return out\n"
+        "\n"
+        "_summary = pd.DataFrame(\n"
+        "    {c: _safe_boundary(sample_df[c]) for c in _boundary_cols}\n"
+        ").T\n"
         "display(_summary.style.format({'distinct_count': '{:,}'}))"
     )

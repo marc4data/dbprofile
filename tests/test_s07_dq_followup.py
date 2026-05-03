@@ -175,6 +175,31 @@ class TestTemporalConsistency:
         assert "1 day(s)" in callouts[0]
         assert "with zero rows" in callouts[0]
 
+    def test_skipped_when_gap_days_is_empty(self):
+        """Temporal consistency that fired but has no gap_days in the
+        detail dict produces a useless empty placeholder cell. We filter
+        those out at the actionability check rather than emit them."""
+        results = [
+            _result("t", "temporal_consistency", "warn", column="ds", gap_days=[]),
+            _result("t", "temporal_consistency", "warn", column="other", gap_days=None),
+        ]
+        cells = build_dq_followup_cells(table="t", check_results=results)
+        # Both findings are unactionable → section as a whole is empty
+        assert cells == []
+
+    def test_actionable_temporal_still_renders_when_others_empty(self):
+        """If at least one temporal finding has gap_days, it renders; the
+        empty ones still get filtered."""
+        results = [
+            _result("t", "temporal_consistency", "warn", column="empty_col", gap_days=[]),
+            _result("t", "temporal_consistency", "warn", column="real_col",
+                    gap_days=[{"date": "2026-01-15", "count": 0}]),
+        ]
+        cells = build_dq_followup_cells(table="t", check_results=results)
+        h3_headings = [s for s in _md_sources(cells) if s.startswith("### ")]
+        assert any("`real_col`" in h for h in h3_headings)
+        assert not any("`empty_col`" in h for h in h3_headings)
+
 
 # ── row_count ────────────────────────────────────────────────────────────────
 

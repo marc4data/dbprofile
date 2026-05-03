@@ -61,7 +61,11 @@ def write_notebook(
     and force paths; the new-file and silent-refresh paths are quiet.
     """
     when = run_at or datetime.utcnow()
-    canonical = out_dir / auto_name(table, "ipynb", prefix="eda_", run_at=when)
+    # Filenames are always lowercase even when the source table is uppercase
+    # (e.g. Snowflake). The table identity inside the notebook (title,
+    # metadata, SQL) keeps the original case.
+    fname_table = table.lower()
+    canonical = out_dir / auto_name(fname_table, "ipynb", prefix="eda_", run_at=when)
 
     # Stamp metadata + hash before writing so the next run has something
     # to compare against. We mutate the nb in place.
@@ -86,7 +90,7 @@ def write_notebook(
         # Don't touch the analyst's file. Write the new baseline to an
         # HHMM-suffixed filename in the same dir.
         dated = out_dir / auto_name(
-            table, "ipynb", prefix="eda_", run_at=when, hhmm=True,
+            fname_table, "ipynb", prefix="eda_", run_at=when, hhmm=True,
         )
         nbformat.write(nb, dated)
         console.print(
