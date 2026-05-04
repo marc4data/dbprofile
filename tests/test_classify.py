@@ -54,6 +54,65 @@ class TestSingleColumn:
         assert classify_one(_facts("month", "INT", n_unique=12)) == ColumnKind.ORDINAL_CAT
         assert classify_one(_facts("dow",   "INT", n_unique=7))  == ColumnKind.ORDINAL_CAT
 
+    def test_ordinal_cat_for_prefixed_ordinal_names(self):
+        """The previous classifier required exact-match against an ordinal
+        name set, so `pickup_month` and `dropoff_hour` fell through to
+        CONTINUOUS. The regex match catches both."""
+        assert classify_one(_facts("pickup_month", "INT", n_unique=12))  == ColumnKind.ORDINAL_CAT
+        assert classify_one(_facts("dropoff_hour", "INT", n_unique=24))  == ColumnKind.ORDINAL_CAT
+        assert classify_one(_facts("created_year", "INT", n_unique=5))   == ColumnKind.ORDINAL_CAT
+        assert classify_one(_facts("event_day_of_week", "INT", n_unique=7)) \
+            == ColumnKind.ORDINAL_CAT
+
+    def test_ordinal_threshold_now_accommodates_hour_and_day_of_month(self):
+        """ORDINAL_NUNIQUE_MAX bumped from 12 → 31 so hour (24) and
+        day-of-month (31) both qualify."""
+        assert classify_one(_facts("hour",         "INT", n_unique=24)) == ColumnKind.ORDINAL_CAT
+        assert classify_one(_facts("day_of_month", "INT", n_unique=31)) == ColumnKind.ORDINAL_CAT
+
+    def test_binary_by_name_pattern_when_cardinality_unknown(self):
+        """*_ind / *_flag / is_* / has_* columns get BINARY even when no
+        FrequencyDistributionCheck ran (so n_unique is None and the
+        n_unique==2 rule can't fire)."""
+        assert classify_one(_facts("airport_pickup_ind", "INT")) == ColumnKind.BINARY
+        assert classify_one(_facts("weather_rain_day_ind", "INT")) == ColumnKind.BINARY
+        assert classify_one(_facts("jfk_flat_rate_flag",  "INT")) == ColumnKind.BINARY
+        assert classify_one(_facts("is_holiday",          "INT")) == ColumnKind.BINARY
+        assert classify_one(_facts("has_subscription",    "INT")) == ColumnKind.BINARY
+
+    def test_binary_name_pattern_does_not_match_unrelated_cols(self):
+        """Names that contain ind/flag as substrings but not as our
+        recognised patterns must NOT be reclassified."""
+        # "industry" contains 'ind' but doesn't end in `_ind`
+        assert classify_one(_facts("industry_code", "VARCHAR", n_unique=8)) \
+            == ColumnKind.LOW_CAT
+        # "rainfall" contains nothing matching, and it's continuous
+        assert classify_one(_facts("rainfall_inches", "FLOAT", n_unique=500)) \
+            == ColumnKind.CONTINUOUS
+
+    def test_numeric_low_cardinality_lookup_id_is_low_cat(self):
+        """vendor_id, payment_type, rate_code_id with low cardinality are
+        categorical lookups, not continuous distributions."""
+        assert classify_one(_facts("vendor_id",      "INT", n_unique=2))  == ColumnKind.BINARY
+        # ↑ binary rule fires first when n_unique==2; the rest go to LOW_CAT
+        assert classify_one(_facts("payment_type",   "INT", n_unique=5))  == ColumnKind.LOW_CAT
+        assert classify_one(_facts("rate_code_id",   "INT", n_unique=6))  == ColumnKind.LOW_CAT
+        assert classify_one(_facts("status_code",    "INT", n_unique=4))  == ColumnKind.LOW_CAT
+        assert classify_one(_facts("currency_key",   "INT", n_unique=10)) == ColumnKind.LOW_CAT
+
+    def test_numeric_id_falls_through_to_continuous_when_cardinality_unknown(self):
+        """Without cardinality info we can't tell if it's a low-card lookup
+        or a high-card primary key; CONTINUOUS is the safe default — the
+        analyst overrides via cfg.notebook.columns when needed."""
+        assert classify_one(_facts("vendor_id",     "INT")) == ColumnKind.CONTINUOUS
+        assert classify_one(_facts("customer_id",   "BIGINT")) == ColumnKind.CONTINUOUS
+
+    def test_numeric_id_falls_through_to_continuous_when_cardinality_high(self):
+        """High-cardinality numeric IDs (real primary keys) stay
+        CONTINUOUS — out of LOW_CAT range and no other rule matches."""
+        assert classify_one(_facts("customer_id", "BIGINT", n_unique=100_000)) \
+            == ColumnKind.CONTINUOUS
+
     def test_continuous_for_other_numeric(self):
         assert classify_one(_facts("price", "DOUBLE", n_unique=1000)) == ColumnKind.CONTINUOUS
 

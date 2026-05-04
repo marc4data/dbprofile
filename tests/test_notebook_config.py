@@ -81,15 +81,15 @@ notebook:
 
 class TestColumnOverrides:
     def test_override_wins_over_auto_classification(self):
-        """An *_IND column would auto-classify as CONTINUOUS (numeric, no
-        cardinality info). With an override it becomes BINARY."""
-        cols = [{"name": "AIRPORT_IND", "data_type": "INTEGER"}]
-        # Without override: CONTINUOUS
+        """A plain numeric column with no cardinality info auto-classifies
+        as CONTINUOUS. With an override it can be forced to anything."""
+        cols = [{"name": "RAW_VALUE", "data_type": "INTEGER"}]
+        # Without override: CONTINUOUS (no name pattern matches)
         out_default = classify_columns(cols, [])
-        assert out_default["AIRPORT_IND"] == ColumnKind.CONTINUOUS
-        # With override: BINARY
-        out_override = classify_columns(cols, [], overrides={"AIRPORT_IND": "binary"})
-        assert out_override["AIRPORT_IND"] == ColumnKind.BINARY
+        assert out_default["RAW_VALUE"] == ColumnKind.CONTINUOUS
+        # With override: BINARY (override always wins)
+        out_override = classify_columns(cols, [], overrides={"RAW_VALUE": "binary"})
+        assert out_override["RAW_VALUE"] == ColumnKind.BINARY
 
     def test_override_for_unknown_column_is_silently_ignored(self):
         cols = [{"name": "REAL_COL", "data_type": "INTEGER"}]

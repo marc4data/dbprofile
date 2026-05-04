@@ -22,15 +22,22 @@ check_results  list[CheckResult] from the same run; we mine cardinality
 
 Priority order — first match wins
 ---------------------------------
-  1. data_type is date/datetime/timestamp  → DATE
-  2. data_type is bool, OR int with n_unique == 2  → BINARY
-  3. string AND name matches *_id / uuid pattern  → STRING_ID
-  4. string AND n_unique ≤ low_cardinality_threshold  → LOW_CAT
-  5. string AND n_unique > low_cardinality_threshold  → HIGH_CAT
-  6. numeric AND name matches count/aggregate pattern  → COUNT_METRIC
-  7. numeric AND n_unique ≤ ORDINAL_NUNIQUE_MAX AND name plausibly ordinal  → ORDINAL_CAT
-  8. numeric  → CONTINUOUS
-  9. fallback  → UNKNOWN
+   1. data_type is date/datetime/timestamp                          → DATE
+   2. data_type is bool, OR int with n_unique == 2                  → BINARY
+   3. numeric AND name matches `*_ind` / `*_flag` / `is_*` / `has_*`  → BINARY
+      (catches indicator/flag columns when cardinality is unknown)
+   4. string AND name matches *_id / uuid / key / hash              → STRING_ID
+   5. numeric AND name matches *_id / *_type / *_code / *_key
+      AND n_unique ≤ low_cardinality_threshold                      → LOW_CAT
+      (numeric lookup IDs are categorical, not continuous)
+   6. string AND n_unique ≤ low_cardinality_threshold               → LOW_CAT
+   7. string AND n_unique > low_cardinality_threshold               → HIGH_CAT
+   8. numeric AND name matches count/aggregate pattern              → COUNT_METRIC
+   9. numeric AND n_unique ≤ ORDINAL_NUNIQUE_MAX AND name has
+      an ordinal suffix (month, year, dow, hour, …)                 → ORDINAL_CAT
+      (regex match — catches prefixed forms like `pickup_month`)
+  10. numeric                                                       → CONTINUOUS
+  11. fallback                                                      → UNKNOWN
 """
 
 from __future__ import annotations
@@ -45,15 +52,35 @@ from dbprofile.checks.base import BaseCheck
 # ── Tuning constants ─────────────────────────────────────────────────────────
 
 DEFAULT_LOW_CARDINALITY_THRESHOLD = 15
-ORDINAL_NUNIQUE_MAX = 12
+ORDINAL_NUNIQUE_MAX = 31    # accommodates month(12), dow(7), hour(24), day-of-month(31)
 
-# Compiled regexes — substring matched against the *lowercased* column name.
+# Compiled regexes — searched against the *lowercased* column name.
 _ID_NAME_RE     = re.compile(r"(^|_)(id|uuid|guid|key|hash)(_|$)")
+
+# Numeric lookup IDs (vendor_id, payment_type, rate_code_id) — separate from
+# the string identifier rule because numeric IDs with low cardinality are
+# better visualised as categoricals (LOW_CAT), whereas string IDs are
+# usually high-cardinality keys we don't want to chart at all (STRING_ID).
+_NUMERIC_ID_NAME_RE = re.compile(r"(^|_)(id|type|code|key)(_|$)")
+
+# Indicator / flag / boolean-by-name columns. Matches:
+#   *_ind                airport_pickup_ind, weather_rain_day_ind
+#   *_flag               store_and_fwd_flag, jfk_flat_rate_flag
+#   is_*                 is_active, is_holiday
+#   has_*                has_subscription
+# Catches binaries even when no FrequencyDistributionCheck ran (so
+# n_unique is unknown — the n_unique==2 rule can't fire).
+_BINARY_NAME_RE = re.compile(r"_(ind|flag)$|^(is|has)_\w+")
+
 _COUNT_NAME_RE  = re.compile(r"_(count|cnt|trips|revenue|total|amount|qty|sum|num)$")
-_ORDINAL_NAMES  = {
-    "month", "year", "day", "dow", "day_of_week", "weekday",
-    "hour", "minute", "quarter", "week", "week_of_year",
-}
+
+# Ordinal name match — regex with a "suffix or whole-word" pattern so
+# prefixed forms like `pickup_month` and `dropoff_hour` are caught alongside
+# bare `month` and `hour`. Replaces the old exact-match-against-set logic.
+_ORDINAL_NAME_RE = re.compile(
+    r"(^|_)(month|year|day|dow|day_of_week|weekday|hour|minute|"
+    r"quarter|week|week_of_year)$"
+)
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -132,16 +159,36 @@ def classify_one(
     is_string  = BaseCheck.is_string(dt)
     is_bool    = "bool" in dt.lower()
 
-    # 2. Binary
+    # 2. Binary by dtype OR exact n_unique == 2
     if is_bool or (is_numeric and facts.n_unique == 2):
         return ColumnKind.BINARY
 
-    # 3. String identifier — check before LOW_CAT/HIGH_CAT so id columns
+    # 3. Binary by name pattern — *_ind, *_flag, is_*, has_*. Catches
+    # indicator columns when no FrequencyDistributionCheck ran so the
+    # n_unique==2 rule above can't fire.
+    if is_numeric and _BINARY_NAME_RE.search(name_lc):
+        return ColumnKind.BINARY
+
+    # 4. String identifier — check before LOW_CAT/HIGH_CAT so id columns
     # don't get charted as categoricals.
     if is_string and _ID_NAME_RE.search(name_lc):
         return ColumnKind.STRING_ID
 
-    # 4 / 5. String categoricals — split on cardinality.
+    # 5. Numeric lookup IDs — vendor_id, payment_type, rate_code_id, etc.
+    # When cardinality is known and low, these are categorical (LOW_CAT)
+    # rather than continuous distributions. Falls through to CONTINUOUS
+    # when cardinality is unknown — could be a high-cardinality primary
+    # key, in which case CONTINUOUS gives a (noisy) chart and the analyst
+    # can override via cfg.notebook.columns.
+    if (
+        is_numeric
+        and _NUMERIC_ID_NAME_RE.search(name_lc)
+        and facts.n_unique is not None
+        and facts.n_unique <= low_cardinality_threshold
+    ):
+        return ColumnKind.LOW_CAT
+
+    # 6 / 7. String categoricals — split on cardinality.
     if is_string:
         # No cardinality info → bias toward LOW_CAT (cheaper, safer to plot).
         n = facts.n_unique if facts.n_unique is not None else 0
@@ -149,24 +196,26 @@ def classify_one(
             return ColumnKind.LOW_CAT
         return ColumnKind.HIGH_CAT
 
-    # 6. Count / aggregate metric — name-driven.
+    # 8. Count / aggregate metric — name-driven.
     if is_numeric and _COUNT_NAME_RE.search(name_lc):
         return ColumnKind.COUNT_METRIC
 
-    # 7. Numeric ordinal (low cardinality + recognisable name).
+    # 9. Numeric ordinal — low cardinality + ordinal-suffix name. Regex
+    # match so `pickup_month` / `dropoff_hour` count alongside bare
+    # `month` / `hour`.
     if (
         is_numeric
         and facts.n_unique is not None
         and facts.n_unique <= ORDINAL_NUNIQUE_MAX
-        and name_lc in _ORDINAL_NAMES
+        and _ORDINAL_NAME_RE.search(name_lc)
     ):
         return ColumnKind.ORDINAL_CAT
 
-    # 8. Continuous numeric — default for any other numeric.
+    # 10. Continuous numeric — default for any other numeric.
     if is_numeric:
         return ColumnKind.CONTINUOUS
 
-    # 9. Anything else.
+    # 11. Anything else.
     return ColumnKind.UNKNOWN
 
 
