@@ -44,28 +44,60 @@ def build_notebook(
     connector_type  'snowflake' | 'bigquery' | 'duckdb' — drives the
                     connector-specific setup cell.
     """
-    classified = classify_columns(columns, check_results)
+    nb_cfg = getattr(config, "notebook", None)
+    sections = nb_cfg.sections if nb_cfg else None
 
+    # Per-column kind overrides from cfg.notebook.columns.
+    overrides = {
+        col_name: ov.kind
+        for col_name, ov in (nb_cfg.columns.items() if nb_cfg else {})
+        if ov.kind is not None
+    }
+    classified = classify_columns(columns, check_results, overrides=overrides)
+
+    # Build each section, gated by its `enabled` flag. Default config has all
+    # sections enabled so omitting `notebook:` from the YAML keeps current
+    # behavior.
     cells: list = []
-    cells.extend(build_header_cells(
-        table=table, schema_name=schema_name, connector_type=connector_type,
-        check_results=check_results,
-    ))
-    cells.extend(build_setup_cells(
-        cfg=config, schema_name=schema_name, connector_type=connector_type,
-    ))
-    cells.extend(build_data_gather_cells(
-        cfg=config, table=table, schema_name=schema_name, columns=columns,
-        classified=classified, check_results=check_results,
-        connector_type=connector_type,
-    ))
-    cells.extend(build_grain_cells(columns=columns, classified=classified))
-    cells.extend(build_univariate_cells(
-        columns=columns, classified=classified, check_results=check_results,
-    ))
-    cells.extend(build_bivariate_cells(columns=columns, classified=classified))
-    cells.extend(build_temporal_cells(columns=columns, classified=classified))
-    cells.extend(build_dq_followup_cells(table=table, check_results=check_results))
+
+    if sections is None or sections.header.enabled:
+        cells.extend(build_header_cells(
+            table=table, schema_name=schema_name, connector_type=connector_type,
+            check_results=check_results,
+        ))
+    if sections is None or sections.setup.enabled:
+        cells.extend(build_setup_cells(
+            cfg=config, schema_name=schema_name, connector_type=connector_type,
+        ))
+    if sections is None or sections.data_gather.enabled:
+        cells.extend(build_data_gather_cells(
+            cfg=config, table=table, schema_name=schema_name, columns=columns,
+            classified=classified, check_results=check_results,
+            connector_type=connector_type,
+            section_cfg=(sections.data_gather if sections else None),
+        ))
+    if sections is None or sections.grain.enabled:
+        cells.extend(build_grain_cells(
+            columns=columns, classified=classified,
+            section_cfg=(sections.grain if sections else None),
+        ))
+    if sections is None or sections.univariate.enabled:
+        cells.extend(build_univariate_cells(
+            columns=columns, classified=classified, check_results=check_results,
+            section_cfg=(sections.univariate if sections else None),
+        ))
+    if sections is None or sections.bivariate.enabled:
+        cells.extend(build_bivariate_cells(
+            columns=columns, classified=classified,
+            section_cfg=(sections.bivariate if sections else None),
+        ))
+    if sections is None or sections.temporal.enabled:
+        cells.extend(build_temporal_cells(columns=columns, classified=classified))
+    if sections is None or sections.dq_followup.enabled:
+        cells.extend(build_dq_followup_cells(
+            table=table, check_results=check_results,
+            section_cfg=(sections.dq_followup if sections else None),
+        ))
 
     nb = nbformat.v4.new_notebook()
     nb.cells = cells

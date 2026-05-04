@@ -33,8 +33,16 @@ def build_grain_cells(
     *,
     columns: list[dict],
     classified: dict[str, ColumnKind],
+    section_cfg=None,
 ) -> list[nbformat.NotebookNode]:
-    """Return the cells for the Schema & Grain section."""
+    """Return the cells for the Schema & Grain section.
+
+    section_cfg is a GrainSectionConfig or None. Honors include_boundary
+    and include_cardinality toggles when present.
+    """
+    include_boundary = getattr(section_cfg, "include_boundary", True)
+    include_cardinality = getattr(section_cfg, "include_cardinality", True)
+
     boundary_cols = [
         col["name"] for col in columns
         if classified.get(col["name"]) not in _BOUNDARY_EXCLUDE
@@ -45,7 +53,7 @@ def build_grain_cells(
     ]
 
     # 3a Boundary Conditions
-    if boundary_cols:
+    if include_boundary and boundary_cols:
         cells.extend([
             section_header(3, "Boundary conditions"),
             md_cell(
@@ -57,17 +65,18 @@ def build_grain_cells(
         ])
 
     # 3c Cardinality Summary
-    cells.extend([
-        section_header(3, "Cardinality summary"),
-        md_cell(
-            "Typed views of `sample_df` — `schema()` shows per-column "
-            "non-null %, distinct counts, and sample values. "
-            "`describe_by_type()` groups columns into numeric / "
-            "categorical / temporal blocks with type-appropriate stats."
-        ),
-        code_cell("schema(sample_df)"),
-        code_cell("describe_by_type(sample_df)"),
-    ])
+    if include_cardinality:
+        cells.extend([
+            section_header(3, "Cardinality summary"),
+            md_cell(
+                "Typed views of `sample_df` — `schema()` shows per-column "
+                "non-null %, distinct counts, and sample values. "
+                "`describe_by_type()` groups columns into numeric / "
+                "categorical / temporal blocks with type-appropriate stats."
+            ),
+            code_cell("schema(sample_df)"),
+            code_cell("describe_by_type(sample_df)"),
+        ])
 
     return cells
 

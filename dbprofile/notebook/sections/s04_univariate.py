@@ -39,8 +39,28 @@ def build_univariate_cells(
     columns: list[dict],
     classified: dict[str, ColumnKind],
     check_results: Iterable,
+    section_cfg=None,
 ) -> list[nbformat.NotebookNode]:
-    """Return the cells for the Univariate Analysis section."""
+    """Return the cells for the Univariate Analysis section.
+
+    section_cfg is a UnivariateSectionConfig or None. Honors per-sub-panel
+    enable flags and tuning knobs (max_continuous_panels, label_threshold,
+    hc_top_n).
+    """
+    # Resolve config knobs with defaults
+    max_panels = getattr(section_cfg, "max_continuous_panels", MAX_CONTINUOUS_PANELS)
+    flag_cfg = getattr(section_cfg, "flag_panel", None)
+    cat_cfg = getattr(section_cfg, "categorical", None)
+    count_cfg = getattr(section_cfg, "count_metrics", None)
+    dist_cfg = getattr(section_cfg, "distributions", None)
+
+    flag_enabled = getattr(flag_cfg, "enabled", True)
+    flag_label_threshold = getattr(flag_cfg, "label_threshold", 12)
+    cat_enabled = getattr(cat_cfg, "enabled", True)
+    cat_hc_top_n = getattr(cat_cfg, "hc_top_n", 20)
+    count_enabled = getattr(count_cfg, "enabled", True)
+    dist_enabled = getattr(dist_cfg, "enabled", True)
+
     by_kind = _columns_by_kind(columns, classified)
     numeric_dist = _numeric_dist_lookup(check_results)
 
@@ -49,28 +69,29 @@ def build_univariate_cells(
 
     # 4a — Flags & ordinals (binary + ordinal_cat).
     flag_cols = by_kind[ColumnKind.BINARY] + by_kind[ColumnKind.ORDINAL_CAT]
-    if flag_cols:
-        cells.extend(_flag_panel_cells(flag_cols))
+    if flag_enabled and flag_cols:
+        cells.extend(_flag_panel_cells(flag_cols, label_threshold=flag_label_threshold))
         sub_emitted = True
 
     # 4b — Categorical low / high cardinality.
-    if by_kind[ColumnKind.LOW_CAT] or by_kind[ColumnKind.HIGH_CAT]:
+    if cat_enabled and (by_kind[ColumnKind.LOW_CAT] or by_kind[ColumnKind.HIGH_CAT]):
         cells.extend(_categorical_panel_cells(
             low_cols=by_kind[ColumnKind.LOW_CAT],
             high_cols=by_kind[ColumnKind.HIGH_CAT],
+            hc_top_n=cat_hc_top_n,
         ))
         sub_emitted = True
 
     # 4c — Count / aggregate metrics.
     count_cols = by_kind[ColumnKind.COUNT_METRIC]
-    if count_cols:
+    if count_enabled and count_cols:
         cells.extend(_count_panel_cells(count_cols))
         sub_emitted = True
 
     # 4d — Continuous distributions.
     cont_cols = by_kind[ColumnKind.CONTINUOUS]
-    if cont_cols:
-        cells.extend(_continuous_panel_cells(cont_cols, numeric_dist))
+    if dist_enabled and cont_cols:
+        cells.extend(_continuous_panel_cells(cont_cols, numeric_dist, max_panels=max_panels))
         sub_emitted = True
 
     if not sub_emitted:
@@ -85,19 +106,22 @@ def build_univariate_cells(
 # ── Sub-section cell builders ────────────────────────────────────────────────
 
 
-def _flag_panel_cells(flag_cols: list[str]) -> list[nbformat.NotebookNode]:
+def _flag_panel_cells(
+    flag_cols: list[str],
+    label_threshold: int = 12,
+) -> list[nbformat.NotebookNode]:
     return [
         section_header(3, "Flag & ordinal fields"),
         md_cell(
             "Histograms for binary flags and low-cardinality ordinals "
-            "(month, day-of-week, hour). `label_threshold=12` shows numeric "
-            "labels above each bar when the panel has 12 or fewer bars."
+            "(month, day-of-week, hour). `label_threshold` shows numeric "
+            "labels above each bar when the panel has that many or fewer bars."
         ),
         code_cell(
             "plot_histograms(\n"
             "    df              = sample_df,\n"
             f"    fields          = {_fields_literal(flag_cols)},\n"
-            "    label_threshold = 12,\n"
+            f"    label_threshold = {label_threshold},\n"
             ")"
         ),
     ]
@@ -107,6 +131,7 @@ def _categorical_panel_cells(
     *,
     low_cols: list[str],
     high_cols: list[str],
+    hc_top_n: int = 20,
 ) -> list[nbformat.NotebookNode]:
     cells = [section_header(3, "Categorical columns")]
     if low_cols:
@@ -123,13 +148,13 @@ def _categorical_panel_cells(
     if high_cols:
         cells.append(md_cell(
             f"High-cardinality categoricals ({len(high_cols)}): "
-            "top-N values per column with a null-rate strip."
+            f"top-{hc_top_n} values per column with a null-rate strip."
         ))
         cells.append(code_cell(
             "plot_string_profile_hc(\n"
             "    df     = sample_df,\n"
             f"    fields = {_fields_literal(high_cols)},\n"
-            "    top_n  = 20,\n"
+            f"    top_n  = {hc_top_n},\n"
             ")"
         ))
     return cells
@@ -154,13 +179,14 @@ def _count_panel_cells(count_cols: list[str]) -> list[nbformat.NotebookNode]:
 def _continuous_panel_cells(
     cont_cols: list[str],
     numeric_dist: dict[str, dict],
+    max_panels: int = MAX_CONTINUOUS_PANELS,
 ) -> list[nbformat.NotebookNode]:
     """One plot_distribution call per continuous column, capped."""
-    selected = cont_cols[:MAX_CONTINUOUS_PANELS]
+    selected = cont_cols[:max_panels]
     cells: list[nbformat.NotebookNode] = [section_header(3, "Distributions")]
-    if len(cont_cols) > MAX_CONTINUOUS_PANELS:
+    if len(cont_cols) > max_panels:
         cells.append(md_cell(
-            f"_Showing first {MAX_CONTINUOUS_PANELS} of {len(cont_cols)} "
+            f"_Showing first {max_panels} of {len(cont_cols)} "
             f"continuous columns. Add more `plot_distribution()` calls "
             f"as needed._"
         ))

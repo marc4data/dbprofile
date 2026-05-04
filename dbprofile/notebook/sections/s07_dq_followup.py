@@ -38,14 +38,31 @@ def build_dq_followup_cells(
     *,
     table: str,
     check_results,
+    section_cfg=None,
 ) -> list[nbformat.NotebookNode]:
     """Return the cells for the DQ Follow-up section.
 
-    Returns an empty list when nothing is flagged for `table` — the
-    section is silently skipped, matching how the Bivariate / Temporal
-    sections behave when their preconditions don't hold.
+    Returns an empty list when nothing is flagged for `table` (post-filter)
+    — the section is silently skipped, matching how the Bivariate /
+    Temporal sections behave when their preconditions don't hold.
+
+    section_cfg is a DQFollowupSectionConfig or None. Honors:
+      * skip_checks  — drops findings whose check_name matches
+      * skip_columns — drops findings whose column matches (exact)
+      * max_subsections — caps the number of expanded sub-sections;
+                          remaining findings are summarized in a
+                          single overflow table at the end.
     """
+    skip_checks = set(getattr(section_cfg, "skip_checks", []) or [])
+    skip_columns = set(getattr(section_cfg, "skip_columns", []) or [])
+    max_sections = getattr(section_cfg, "max_subsections", 20)
+
     flagged = _flagged_for_table(check_results, table)
+    flagged = [
+        r for r in flagged
+        if getattr(r, "check_name", "") not in skip_checks
+        and getattr(r, "column", "") not in skip_columns
+    ]
     if not flagged:
         return []
 
@@ -59,9 +76,50 @@ def build_dq_followup_cells(
         ),
     ]
     # Order: critical before warn, then by check_name, then by column.
-    for r in _sort_findings(flagged):
+    sorted_findings = _sort_findings(flagged)
+    expanded = sorted_findings[:max_sections]
+    overflow = sorted_findings[max_sections:]
+
+    for r in expanded:
         cells.extend(_per_finding_cells(r))
+
+    # Overflow goes into a single summary table at the end so the
+    # analyst still sees the full picture without scrolling 70 sub-sections.
+    if overflow:
+        cells.extend(_overflow_summary_cells(overflow, total=len(sorted_findings),
+                                             max_sections=max_sections))
+
     return cells
+
+
+def _overflow_summary_cells(
+    overflow: list,
+    *,
+    total: int,
+    max_sections: int,
+) -> list[nbformat.NotebookNode]:
+    """Single sub-section summarizing the findings that exceeded the cap."""
+    rows = "\n".join(
+        f"| {getattr(r, 'severity', '?'):>8} | "
+        f"{getattr(r, 'check_name', '?').replace('_', ' ').title()} | "
+        f"`{getattr(r, 'column', '') or '—'}` |"
+        for r in overflow
+    )
+    note = (
+        f"_Showing the first **{max_sections}** of **{total}** flagged "
+        f"findings as expanded sub-sections. The remaining "
+        f"**{len(overflow)}** are listed below — see the JSON export "
+        f"for full detail._"
+    )
+    return [
+        section_header(3, "Additional findings (summary)"),
+        md_cell(note),
+        md_cell(
+            "| Severity | Check | Column |\n"
+            "|---|---|---|\n"
+            f"{rows}"
+        ),
+    ]
 
 
 # ── Sorting + filtering ──────────────────────────────────────────────────────
