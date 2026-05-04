@@ -39,6 +39,52 @@ CHECK_LABELS = {
     "format_validation":      "Format Validation",
 }
 
+# One-line description of what each check measures + the threshold or
+# behavior the analyst needs to know. Surfaced as `title=` tooltips on
+# heatmap + scoreboard column headers (HTML report) and appended to each
+# DQ callout in the generated notebooks (s00_header).
+#
+# When adding a new check: add to CANONICAL_ORDER + CHECK_LABELS +
+# CHECK_SHORT + NAV_LABELS + CHECK_WEIGHTS + here.
+CHECK_DEFINITIONS = {
+    "schema_audit": (
+        "Detects all-null columns and any expected columns missing from "
+        "the source schema."
+    ),
+    "row_count": (
+        "Verifies the table is non-empty and surfaces daily-volume "
+        "anomalies (gaps, skew days)."
+    ),
+    "sample_rows": (
+        "Top-N row preview for visual inspection."
+    ),
+    "null_density": (
+        "% of NULL values per column. Warns above the configured threshold "
+        "(default 10%); critical above the configured threshold (default 50%)."
+    ),
+    "uniqueness": (
+        "Distinct-value % per column. Flags probable primary keys "
+        "(≥95% distinct) vs attributes with high duplicate rates."
+    ),
+    "numeric_distribution": (
+        "Per-column p25/p50/p75/p95/p99, IQR-based outlier detection, "
+        "and a histogram. Critical when outlier % exceeds the threshold."
+    ),
+    "frequency_distribution": (
+        "Top values for low-cardinality columns. Skipped above the "
+        "cardinality limit (default 200 distinct values)."
+    ),
+    "temporal_consistency": (
+        "Daily-volume anomaly detection on date columns — flags zero-row "
+        "gap days and skew days (single day exceeding the configured % "
+        "of total rows)."
+    ),
+    "format_validation": (
+        "Pattern-matches string values against expected formats "
+        "(email, phone, UUID, ISO country/currency, ZIP, URL)."
+    ),
+}
+
 CHECK_SHORT = {
     "schema_audit":           "SA",
     "row_count":              "RC",
@@ -731,6 +777,7 @@ def _build_report_context(
         "canonical_order": CANONICAL_ORDER,
         "check_labels": CHECK_LABELS,
         "check_short": CHECK_SHORT,
+        "check_definitions": CHECK_DEFINITIONS,
         "nav_labels": NAV_LABELS,
         "total_tables": len(unique_tables),
         "total_columns": unique_columns,

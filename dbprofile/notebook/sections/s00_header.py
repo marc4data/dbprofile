@@ -95,11 +95,18 @@ def _callout_cells(
 
 
 def _bullet_summary(check_name: str, results: list) -> str:
-    """One callout body: '<check> (<n> <severity>): col1, col2, …'.
+    """One callout body: '<check> (<n> <severity>): col1, col2, … — <definition>'.
 
     Truncates to 6 columns to keep the callout scannable; the full list
     is always available in the corresponding section's deep-dive cell.
+    The check definition (one-liner from renderer.CHECK_DEFINITIONS) is
+    appended on its own line so the analyst sees what the check measures
+    right next to the finding.
     """
+    # Late import to avoid pulling the renderer (heavy: jinja, etc.) into the
+    # notebook generator's startup path. Import is cheap when invoked.
+    from dbprofile.report.renderer import CHECK_DEFINITIONS
+
     severity = results[0].severity
     cols = [r.column for r in results if getattr(r, "column", None)]
     title = check_name.replace("_", " ").title()
@@ -109,6 +116,9 @@ def _bullet_summary(check_name: str, results: list) -> str:
         sample = cols[:6]
         more = "" if len(cols) <= 6 else f" (+ {len(cols) - 6} more)"
         body_lines.append("Columns: " + ", ".join(f"`{c}`" for c in sample) + more)
+    definition = CHECK_DEFINITIONS.get(check_name)
+    if definition:
+        body_lines.append(f"_{definition}_")
     return "\n".join(body_lines)
 
 
