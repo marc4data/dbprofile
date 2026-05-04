@@ -43,10 +43,19 @@ def build_data_gather_cells(
     classified: dict[str, ColumnKind],
     check_results,
     connector_type: str,
+    section_cfg=None,
 ) -> list[nbformat.NotebookNode]:
-    """Return the cells for the Data Gathering section."""
+    """Return the cells for the Data Gathering section.
+
+    section_cfg is a DataGatherSectionConfig or None. When None we use the
+    module defaults (TARGET_ROWS / FLOOR_PCT) so existing tests + callers
+    that haven't been updated keep working.
+    """
+    target_rows = getattr(section_cfg, "sample_target_rows", TARGET_ROWS)
+    floor_pct = getattr(section_cfg, "sample_floor_pct", FLOOR_PCT)
+
     row_count = _row_count_from_results(check_results, table)
-    sample_pct = _bernoulli_pct(row_count)
+    sample_pct = _bernoulli_pct(row_count, target_rows=target_rows, floor_pct=floor_pct)
     table_ref = _table_ref(connector_type=connector_type, table=table,
                            schema_name=schema_name, cfg=cfg)
     sample_clause = _sample_clause(connector_type, sample_pct)
@@ -86,17 +95,21 @@ def build_data_gather_cells(
 # ── Sampling helpers ─────────────────────────────────────────────────────────
 
 
-def _bernoulli_pct(row_count: int | None, target_rows: int = TARGET_ROWS) -> float:
+def _bernoulli_pct(
+    row_count: int | None,
+    target_rows: int = TARGET_ROWS,
+    floor_pct: float = FLOOR_PCT,
+) -> float:
     """Return the sample percentage that approximates `target_rows`.
 
-    Clamped to [floor, 100]. When row_count is unknown (no RowCountCheck
+    Clamped to [floor_pct, 100]. When row_count is unknown (no RowCountCheck
     result), fall back to 100% — the analyst will hit the full table,
     which is safer than guessing too low.
     """
     if not row_count or row_count <= 0:
         return 100.0
     pct = (target_rows / row_count) * 100.0
-    return round(max(FLOOR_PCT, min(100.0, pct)), 2)
+    return round(max(floor_pct, min(100.0, pct)), 2)
 
 
 def _sample_clause(connector_type: str, pct: float) -> str:

@@ -40,6 +40,72 @@ HELPERS = (
 
 GITIGNORE_FILENAME = ".gitignore"
 REQUIREMENTS_FILENAME = "requirements.txt"
+NOTEBOOK_CONFIG_EXAMPLE_FILENAME = "notebook_config.example.yaml"
+
+# Example notebook: block — fully commented so every default is visible.
+# Analyst can copy any block into their config_*.yaml under `notebook:`.
+_NOTEBOOK_CONFIG_TEMPLATE = """\
+# Example dbprofile notebook config — paste any block(s) you want to
+# customize into your config YAML under a top-level `notebook:` key.
+# All keys are OPTIONAL; omitting them keeps the documented defaults.
+#
+# Pydantic-validated at load time, so typos fail loudly.
+
+notebook:
+  # ── 1. Per-column classifier overrides ─────────────────────────────
+  # Wins over auto-classification. Useful for:
+  #   - 0/1 indicator columns the classifier reads as "continuous"
+  #   - low-cardinality numeric IDs (rate_code_id, vendor_id) that
+  #     should display as categoricals, not distributions
+  #   - prefixed ordinals (pickup_month, dropoff_hour) that miss the
+  #     name-based ordinal heuristic
+  #
+  # Valid `kind` values:
+  #   binary | ordinal_cat | low_cat | high_cat | string_id |
+  #   count_metric | continuous | date | unknown
+  #
+  # columns:
+  #   AIRPORT_PICKUP_IND:   { kind: binary }
+  #   PICKUP_MONTH:         { kind: ordinal_cat }
+  #   VENDOR_ID:            { kind: low_cat }
+
+  # ── 2. Section toggles + per-section knobs ─────────────────────────
+  # sections:
+  #   header:        { enabled: true }
+  #   setup:         { enabled: true }
+  #
+  #   data_gather:
+  #     enabled: true
+  #     sample_target_rows: 50000
+  #     sample_floor_pct:   0.1
+  #
+  #   grain:
+  #     enabled: true
+  #     include_boundary:    true
+  #     include_cardinality: true
+  #
+  #   univariate:
+  #     enabled: true
+  #     max_continuous_panels: 12
+  #     flag_panel:    { enabled: true, label_threshold: 12 }
+  #     categorical:   { enabled: true, low_cat_threshold: 15, hc_top_n: 20 }
+  #     count_metrics: { enabled: true }
+  #     distributions: { enabled: true }
+  #
+  #   bivariate:
+  #     enabled: true
+  #     top_pairs:    4
+  #     corr_floor:   0.10
+  #     corr_ceiling: 0.98
+  #
+  #   temporal:      { enabled: true }
+  #
+  #   dq_followup:
+  #     enabled: true
+  #     max_subsections: 20             # cap; rest go into a summary table
+  #     skip_checks: []                 # e.g. [frequency_distribution]
+  #     skip_columns: []                # exact-match column blocklist
+"""
 
 # Runtime deps the generated EDA notebooks need on the analyst's side.
 # Includes every dialect's connector — the user can trim what they don't use.
@@ -96,6 +162,16 @@ def _ensure_requirements(out_dir: Path) -> None:
     if req.exists():
         return
     req.write_text(_REQUIREMENTS_TEMPLATE, encoding="utf-8")
+
+
+def _ensure_notebook_config_example(out_dir: Path) -> None:
+    """Drop a fully-commented notebook_config.example.yaml in dq_eda/ so
+    every config knob is discoverable. Never overwrites if present —
+    analysts may keep their working notes there."""
+    cfg = out_dir / NOTEBOOK_CONFIG_EXAMPLE_FILENAME
+    if cfg.exists():
+        return
+    cfg.write_text(_NOTEBOOK_CONFIG_TEMPLATE, encoding="utf-8")
 
 
 def _classify(helper_name: str, out_dir: Path) -> str:
@@ -176,6 +252,7 @@ def copy_helpers(out_dir: Path, *, force: bool = False) -> dict[str, str]:
         state.update_helper_versions(out_dir, new_hashes)
         _ensure_gitignore(out_dir)
         _ensure_requirements(out_dir)
+        _ensure_notebook_config_example(out_dir)
 
     if skipped_modified:
         console.print(

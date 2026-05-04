@@ -72,6 +72,7 @@ def _write_notebooks_from_results(
     results: list,
     out_dir: Path,
     run_at: datetime,
+    force: bool = False,
 ) -> None:
     """Write one notebook per table covered by `results`.
 
@@ -114,7 +115,7 @@ def _write_notebooks_from_results(
             config=cfg,
             connector_type=connector_type,
         )
-        path, outcome = write_notebook(nb, out_dir, table, run_at=run_at)
+        path, outcome = write_notebook(nb, out_dir, table, force=force, run_at=run_at)
         console.print(f"  [green]{outcome:>30}[/green] → {path.name}")
 
 
@@ -150,6 +151,9 @@ def main() -> None:
 @click.option("--export-notebook", default=None,
               help="Per-table EDA notebook generation. Requires --project-dir. "
                    "Enabled by default; pass 'none' to skip.")
+@click.option("--force", is_flag=True,
+              help="Overwrite analyst-modified notebooks (originals saved to "
+                   ".backups/). Mirrors `dbprofile notebook --force`.")
 @click.option("--verbose", "-v", is_flag=True, default=False,
               help="Enable debug logging.")
 def run(
@@ -162,6 +166,7 @@ def run(
     export_json: str | None,
     export_excel: str | None,
     export_notebook: str | None,
+    force: bool,
     verbose: bool,
 ) -> None:
     """Profile a database and produce an HTML report.
@@ -259,7 +264,7 @@ def run(
     # already (results + cfg); no need to re-run the profile.
     if notebook_enabled:
         _write_notebooks_from_results(
-            cfg=cfg, results=results, out_dir=out_dir, run_at=run_at,
+            cfg=cfg, results=results, out_dir=out_dir, run_at=run_at, force=force,
         )
 
     # BigQuery cost summary

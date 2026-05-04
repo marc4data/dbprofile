@@ -134,11 +134,117 @@ class ReportConfig(BaseModel):
     thresholds: CheckThresholds = CheckThresholds()
 
 
+# ---------------------------------------------------------------------------
+# Notebook generation config (per-section + per-column knobs)
+#
+# Mirrors the ColumnKind enum values as a Literal type so we don't have to
+# import from dbprofile.notebook.classify (circular-import safe). The
+# classifier will translate these strings back into the enum at apply time.
+# ---------------------------------------------------------------------------
+
+ColumnKindName = Literal[
+    "date", "binary", "ordinal_cat", "low_cat", "high_cat",
+    "string_id", "count_metric", "continuous", "unknown",
+]
+
+
+class ColumnNotebookOverride(BaseModel):
+    """Per-column overrides applied during notebook generation.
+
+    Currently `kind` only — wins over the auto-classifier when set.
+    Future: per-column chart-param overrides (bin_cnt, top_n, etc.).
+    """
+    kind: ColumnKindName | None = None
+
+
+class HeaderSectionConfig(BaseModel):
+    enabled: bool = True
+
+
+class SetupSectionConfig(BaseModel):
+    enabled: bool = True
+
+
+class DataGatherSectionConfig(BaseModel):
+    enabled: bool = True
+    sample_target_rows: int = 50_000
+    sample_floor_pct: float = 0.1
+
+
+class GrainSectionConfig(BaseModel):
+    enabled: bool = True
+    include_boundary: bool = True
+    include_cardinality: bool = True
+
+
+class FlagPanelConfig(BaseModel):
+    enabled: bool = True
+    label_threshold: int = 12
+
+
+class CategoricalPanelConfig(BaseModel):
+    enabled: bool = True
+    low_cat_threshold: int = 15
+    hc_top_n: int = 20
+
+
+class CountMetricsPanelConfig(BaseModel):
+    enabled: bool = True
+
+
+class DistributionsPanelConfig(BaseModel):
+    enabled: bool = True
+
+
+class UnivariateSectionConfig(BaseModel):
+    enabled: bool = True
+    max_continuous_panels: int = 12
+    flag_panel: FlagPanelConfig = FlagPanelConfig()
+    categorical: CategoricalPanelConfig = CategoricalPanelConfig()
+    count_metrics: CountMetricsPanelConfig = CountMetricsPanelConfig()
+    distributions: DistributionsPanelConfig = DistributionsPanelConfig()
+
+
+class BivariateSectionConfig(BaseModel):
+    enabled: bool = True
+    top_pairs: int = 4
+    corr_floor: float = 0.10
+    corr_ceiling: float = 0.98
+
+
+class TemporalSectionConfig(BaseModel):
+    enabled: bool = True
+
+
+class DQFollowupSectionConfig(BaseModel):
+    enabled: bool = True
+    max_subsections: int = 20            # cap; rest go into a summary table
+    skip_checks: list[str] = []          # check_names to drop entirely
+    skip_columns: list[str] = []         # exact-match column blocklist
+
+
+class NotebookSectionsConfig(BaseModel):
+    header:      HeaderSectionConfig      = HeaderSectionConfig()
+    setup:       SetupSectionConfig       = SetupSectionConfig()
+    data_gather: DataGatherSectionConfig  = DataGatherSectionConfig()
+    grain:       GrainSectionConfig       = GrainSectionConfig()
+    univariate:  UnivariateSectionConfig  = UnivariateSectionConfig()
+    bivariate:   BivariateSectionConfig   = BivariateSectionConfig()
+    temporal:    TemporalSectionConfig    = TemporalSectionConfig()
+    dq_followup: DQFollowupSectionConfig  = DQFollowupSectionConfig()
+
+
+class NotebookConfig(BaseModel):
+    columns:  dict[str, ColumnNotebookOverride] = {}
+    sections: NotebookSectionsConfig = NotebookSectionsConfig()
+
+
 class ProfileConfig(BaseModel):
     connection: ConnectionConfig
     scope: ScopeConfig
     checks: ChecksConfig = ChecksConfig()
     report: ReportConfig = ReportConfig()
+    notebook: NotebookConfig = NotebookConfig()
 
 
 # ---------------------------------------------------------------------------
