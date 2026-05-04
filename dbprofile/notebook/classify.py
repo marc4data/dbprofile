@@ -84,21 +84,32 @@ def classify_columns(
     check_results: Iterable,
     *,
     low_cardinality_threshold: int = DEFAULT_LOW_CARDINALITY_THRESHOLD,
+    overrides: dict[str, str] | None = None,
 ) -> dict[str, ColumnKind]:
     """Map every column to a ColumnKind.
 
     columns        list of {name, data_type, is_nullable} from get_columns()
     check_results  iterable of CheckResult — used only to source cardinality
+    overrides      optional {column_name: ColumnKind value} from
+                   cfg.notebook.columns.<col>.kind. Wins over auto-classification.
+                   Unknown column names are ignored (logged at INFO would be
+                   ideal, kept silent here to avoid noise).
     """
+    overrides = overrides or {}
     cardinality = _build_cardinality_map(check_results)
     out: dict[str, ColumnKind] = {}
     for col in columns:
+        name = col["name"]
+        if name in overrides:
+            # Pydantic guarantees the value is a valid ColumnKind string.
+            out[name] = ColumnKind(overrides[name])
+            continue
         facts = ColumnFacts(
-            name=col["name"],
+            name=name,
             data_type=col.get("data_type", ""),
-            n_unique=cardinality.get(col["name"]),
+            n_unique=cardinality.get(name),
         )
-        out[col["name"]] = classify_one(
+        out[name] = classify_one(
             facts, low_cardinality_threshold=low_cardinality_threshold,
         )
     return out

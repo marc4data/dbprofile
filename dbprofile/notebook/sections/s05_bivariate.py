@@ -41,8 +41,17 @@ def build_bivariate_cells(
     *,
     columns: list[dict],
     classified: dict[str, ColumnKind],
+    section_cfg=None,
 ) -> list[nbformat.NotebookNode]:
-    """Return the cells for the Bivariate Analysis section."""
+    """Return the cells for the Bivariate Analysis section.
+
+    section_cfg is a BivariateSectionConfig or None. Honors top_pairs,
+    corr_floor, and corr_ceiling knobs.
+    """
+    top_pairs = getattr(section_cfg, "top_pairs", TOP_PAIRS)
+    corr_floor = getattr(section_cfg, "corr_floor", PAIR_CORR_FLOOR)
+    corr_ceiling = getattr(section_cfg, "corr_ceiling", PAIR_CORR_CEIL)
+
     continuous_cols = [
         col["name"] for col in columns
         if classified.get(col["name"]) == ColumnKind.CONTINUOUS
@@ -62,7 +71,9 @@ def build_bivariate_cells(
         ),
     ]
     cells.extend(_correlation_heatmap_cells())
-    cells.extend(_scatter_pairs_cells())
+    cells.extend(_scatter_pairs_cells(
+        top_pairs=top_pairs, corr_floor=corr_floor, corr_ceiling=corr_ceiling,
+    ))
     return cells
 
 
@@ -104,20 +115,32 @@ def _heatmap_source() -> str:
 # ── 5b — Top scatter pairs ───────────────────────────────────────────────────
 
 
-def _scatter_pairs_cells() -> list[nbformat.NotebookNode]:
+def _scatter_pairs_cells(
+    *,
+    top_pairs: int = TOP_PAIRS,
+    corr_floor: float = PAIR_CORR_FLOOR,
+    corr_ceiling: float = PAIR_CORR_CEIL,
+) -> list[nbformat.NotebookNode]:
     return [
         section_header(3, "Top scatter pairs"),
         md_cell(
             f"Computes |corr| at runtime, filters out pairs above "
-            f"{PAIR_CORR_CEIL:.2f} (likely derived columns) and below "
-            f"{PAIR_CORR_FLOOR:.2f} (uninteresting), and emits up to "
-            f"{TOP_PAIRS} `plot_scatter()` calls in a loop."
+            f"{corr_ceiling:.2f} (likely derived columns) and below "
+            f"{corr_floor:.2f} (uninteresting), and emits up to "
+            f"{top_pairs} `plot_scatter()` calls in a loop."
         ),
-        code_cell(_scatter_pairs_source()),
+        code_cell(_scatter_pairs_source(
+            top_pairs=top_pairs, corr_floor=corr_floor, corr_ceiling=corr_ceiling,
+        )),
     ]
 
 
-def _scatter_pairs_source() -> str:
+def _scatter_pairs_source(
+    *,
+    top_pairs: int = TOP_PAIRS,
+    corr_floor: float = PAIR_CORR_FLOOR,
+    corr_ceiling: float = PAIR_CORR_CEIL,
+) -> str:
     """Pick top N pairs at runtime, then loop plot_scatter over them."""
     return (
         "import numpy as np\n"
@@ -130,10 +153,10 @@ def _scatter_pairs_source() -> str:
         "for i, a in enumerate(_cols):\n"
         "    for b in _cols[i + 1:]:\n"
         "        r = _corr_matrix.loc[a, b]\n"
-        f"        if {PAIR_CORR_FLOOR} <= r <= {PAIR_CORR_CEIL}:\n"
+        f"        if {corr_floor} <= r <= {corr_ceiling}:\n"
         "            _pairs.append((a, b, r))\n"
         "_pairs.sort(key=lambda p: -p[2])\n"
-        f"_pairs = _pairs[:{TOP_PAIRS}]\n"
+        f"_pairs = _pairs[:{top_pairs}]\n"
         "\n"
         "if _pairs:\n"
         "    print('Top scatter pairs:',\n"
@@ -146,6 +169,6 @@ def _scatter_pairs_source() -> str:
         "            trend   = 'linear',\n"
         "        )\n"
         "else:\n"
-        f"    print('No correlation pairs in [{PAIR_CORR_FLOOR}, "
-        f"{PAIR_CORR_CEIL}] range — skipping scatter plots.')"
+        f"    print('No correlation pairs in [{corr_floor}, "
+        f"{corr_ceiling}] range — skipping scatter plots.')"
     )
