@@ -172,3 +172,37 @@ class TestDQCallouts:
             check_results=results,
         )
         assert "3 DQ issue(s) flagged" in cells[1]["source"]
+
+
+class TestCheckDefinitionsInCallouts:
+    """Each DQ callout should append the check definition (one-line text
+    from renderer.CHECK_DEFINITIONS) so the analyst sees what the check
+    measures right next to the finding."""
+
+    def test_definition_appended_to_callout(self):
+        from dbprofile.report.renderer import CHECK_DEFINITIONS
+        results = [_result("t", "null_density", "critical", column="email")]
+        cells = build_header_cells(
+            table="t", schema_name="s", connector_type="duckdb",
+            check_results=results,
+        )
+        callouts = [c["source"] for c in cells if c["source"].startswith(">")]
+        # Definition appears in italics (markdown _..._) on its own line
+        expected = CHECK_DEFINITIONS["null_density"]
+        assert expected in callouts[0]
+
+    def test_definitions_are_unique_per_check(self):
+        """Sanity: every check listed in CHECK_DEFINITIONS has a non-empty
+        unique-ish description so callouts aren't all the same text."""
+        from dbprofile.report.renderer import (
+            CANONICAL_ORDER,
+            CHECK_DEFINITIONS,
+        )
+        for cn in CANONICAL_ORDER:
+            assert cn in CHECK_DEFINITIONS, f"{cn} missing from CHECK_DEFINITIONS"
+            assert len(CHECK_DEFINITIONS[cn]) > 20, f"{cn} definition is too short"
+        # No two checks share an identical definition
+        seen = set()
+        for cn, defn in CHECK_DEFINITIONS.items():
+            assert defn not in seen, f"duplicate definition for {cn}"
+            seen.add(defn)

@@ -741,7 +741,7 @@ body.issues-only .table-section.all-ok{display:none}
           <th class="sb-right" title="Number of columns in the table" data-sort="num">Cols</th>
           <th class="sb-center" title="Quality score 0–100 — weighted average of check severities" data-sort="num">Score</th>
           {% for cn in canonical_order %}
-          <th class="sb-center" title="{{ check_labels[cn] }}" data-sort="str">{{ nav_labels[cn] }}</th>
+          <th class="sb-center" title="{{ check_labels[cn] }} — {{ check_definitions[cn] }}" data-sort="str">{{ nav_labels[cn] }}</th>
           {% endfor %}
         </tr>
       </thead>
@@ -862,7 +862,7 @@ body.issues-only .table-section.all-ok{display:none}
               <th class="col-left" title="Nullable — N = NOT NULL constraint (no nulls allowed, bold); Y = nullable (nulls allowed, muted)" data-sort="str">Null?</th>
               <th class="col-left" title="Shape — numeric columns: box plot (whiskers=min/max, box=P25–P75, tick=P50 median); non-numeric columns: outlined box (cardinality not applicable)">Shape</th>
               {% for cn in canonical_order %}
-              <th class="hm-check-hdr" title="{{ check_labels[cn] }}" data-sort="num">{{ nav_labels[cn] }}<span class="hdr-short">{{ check_short[cn] }}</span></th>
+              <th class="hm-check-hdr" title="{{ check_labels[cn] }} — {{ check_definitions[cn] }}" data-sort="num">{{ nav_labels[cn] }}<span class="hdr-short">{{ check_short[cn] }}</span></th>
               {% endfor %}
             </tr>
           </thead>
